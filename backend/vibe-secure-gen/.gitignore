@@ -1,0 +1,80 @@
+# ============================
+# vibe-secure-gen (.gitignore)
+# ============================
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor/IDE
+.vscode/
+.history/
+*.code-workspace
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.pyre/
+.dmypy.json
+.cache/
+
+# Virtual environments (local to this service)
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+.wheelhouse/
+
+# App runtime artifacts
+*.log
+*.tmp
+*.sqlite3
+/tmp/
+tmp/
+out/
+artifacts/
+scratch/
+
+# Env secrets (keep an example file tracked)
+.env
+.env.*
+!.env.example
+
+# Semgrep / SAST outputs & caches
+.semgrep/
+.semgrep-cache/
+semgrep.json
+semgrep.sarif
+semgrep-results*.json
+semgrep-report*.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node (only if you later add a small UI here)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+*.local
+
+# Misc backups
+*.bak
+*.backup
+*.rej
