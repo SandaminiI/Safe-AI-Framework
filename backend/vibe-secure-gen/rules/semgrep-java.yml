@@ -1,0 +1,13 @@
+rules:
+  - id: java-sql-concat
+    message: "Avoid SQL string concatenation. Use PreparedStatement."
+    languages: [java]
+    severity: ERROR
+    patterns:
+      - pattern: |
+          String $Q = "... " + $X;
+  - id: java-md5-password
+    message: "Do not use MD5 for password hashing. Use BCrypt."
+    languages: [java]
+    severity: ERROR
+    pattern: MessageDigest.getInstance("MD5")
