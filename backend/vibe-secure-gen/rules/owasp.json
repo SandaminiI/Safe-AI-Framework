@@ -1,0 +1,12 @@
+{
+  "java": {
+    "guidelines": [
+      "Use PreparedStatement for all SQL (no string concatenation).",
+      "Hash passwords with BCrypt; never MD5/SHA1 for passwords.",
+      "No secrets in code; use environment variables/config.",
+      "Add security headers (X-Content-Type-Options, Referrer-Policy, etc.).",
+      "Block SSRF to internal IPs (127.0.0.1, 10/8, 172.16/12, 192.168/16, 169.254/16).",
+      "Log without sensitive data; redact tokens/passwords/emails."
+    ]
+  }
+}
