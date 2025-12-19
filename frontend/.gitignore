@@ -1,0 +1,50 @@
+# --- Vite React TS (frontend) .gitignore ---
+
+# Node / package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# Keep lockfiles (important for reproducible installs)
+!package-lock.json
+!yarn.lock
+!pnpm-lock.yaml
+!bun.lockb
+
+# Vite / build output & caches
+dist/
+build/
+.vite/
+node_modules/.vite/
+.eslintcache
+.stylelintcache
+.tsbuildinfo
+.vitest/
+coverage/
+
+# Local env files (commit only a sample)
+.env
+.env.*.local
+!.env.example
+
+# Editor/IDE junk
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Storybook (if ever added)
+storybook-static/
+
+# Misc caches
+.cache/
+.sass-cache/
