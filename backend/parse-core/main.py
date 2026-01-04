@@ -1,42 +1,195 @@
-from fastapi import FastAPI # type: ignore
+from __future__ import annotations
+
+import os
+import tempfile
+from typing import List, Literal, Optional, Dict, Any
+
+from fastapi import FastAPI, HTTPException # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pydantic import BaseModel # type: ignore
-from detect import detect_language
+
 from adapters.java_adapter import JavaAdapter
 
-app = FastAPI()
-java_adapter = JavaAdapter()
+# ---------------------------------------------------------
+# FastAPI app + CORS
+# ---------------------------------------------------------
 
-class Req(BaseModel):
+app = FastAPI(title="Parser Core Service", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       # dev-friendly; tighten later if you want
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------
+# Health check
+# ---------------------------------------------------------
+
+@app.get("/health")
+def health() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------
+# Language detection (very simple heuristic)
+# ---------------------------------------------------------
+
+class DetectRequest(BaseModel):
     code: str
-    filename: str | None = None
 
-@app.post("/detect")
-def detect(req: Req):
-    lang, conf, source = detect_language(req.code, req.filename)
-    return {
-        "language": lang,
-        "confidence": conf,
-        "source": source
-    }
+
+class DetectResponse(BaseModel):
+    language: Literal["java", "python", "javascript", "unknown"]
+
+
+def _detect_language_from_code(code: str) -> str:
+    """Very lightweight heuristic language detector for code."""
+    snippet = code.lower()
+
+    # Java
+    if "package " in snippet or "public class " in snippet or "import java." in snippet:
+        return "java"
+
+    # Python
+    if "def " in snippet or "import " in snippet and "{" not in snippet and ";" not in snippet:
+        return "python"
+
+    # JavaScript / TS
+    if "function " in snippet or "=> {" in snippet or "import {" in snippet and " from " in snippet:
+        return "javascript"
+
+    return "unknown"
+
+
+@app.post("/detect", response_model=DetectResponse)
+def detect(req: DetectRequest) -> DetectResponse:
+    lang = _detect_language_from_code(req.code or "")
+    # normalise to allowed literals
+    if lang not in ("java", "python", "javascript"):
+        lang = "unknown"
+    return DetectResponse(language=lang)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------
+# Single-file parse → CIR
+# ---------------------------------------------------------
 
 class ParseRequest(BaseModel):
     code: str
-    filename: str | None = None
+    filename: str
+    # optional language; if not given, we try to detect
+    language: Optional[Literal["java", "python", "javascript"]] = None
 
-@app.post("/parse")
-def parse(req: ParseRequest):
-     # detect language
-     lang, conf, source = detect_language(req.code, req.filename)
 
-     if lang == "java":
-         graph = java_adapter.build_cir_graph_for_code(req.code, req.filename)
-         cir_json = graph.to_debug_json()
-         return {
-             "language": lang,
-             "confidence": conf,
-             "source": source,
-             "cir": cir_json
-         }
+class ParseResponse(BaseModel):
+    language: str
+    file_count: int
+    cir: Dict[str, Any]
 
-     # future: handle python / typescript
-     return {"error": f"Parsing not yet implemented for language: {lang}"}
+
+@app.post("/parse", response_model=ParseResponse)
+def parse(req: ParseRequest) -> ParseResponse:
+    """
+    Parse a single code snippet into CIR.
+    For now, only Java is supported.
+    """
+    lang = req.language or _detect_language_from_code(req.code)
+
+    if lang != "java":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only 'java' is supported by /parse at the moment (detected: {lang}).",
+        )
+
+    adapter = JavaAdapter()
+    # JavaAdapter is expected to work on a code string
+    graph = adapter.build_cir_graph_for_code(req.code, filename=req.filename)  # type: ignore[arg-type]
+    cir = graph.to_debug_json()
+
+    return ParseResponse(
+        language="java",
+        file_count=1,
+        cir=cir,
+    )
+
+
+# ---------------------------------------------------------
+# Project-level parse (multiple Java files) → merged CIR
+# ---------------------------------------------------------
+
+class ProjectFile(BaseModel):
+    filename: str
+    code: str
+
+
+class ProjectParseRequest(BaseModel):
+    # we only support Java for project parse right now
+    language: Literal["java"] = "java"
+    files: List[ProjectFile]
+
+
+class ProjectParseResponse(BaseModel):
+    language: str
+    file_count: int
+    cir: Dict[str, Any]
+
+
+@app.post("/parse/project", response_model=ProjectParseResponse)
+def parse_project(req: ProjectParseRequest) -> ProjectParseResponse:
+    """
+    Accept multiple Java files and build ONE merged CIR graph
+    using JavaAdapter.build_cir_graph_for_files(...).
+
+    This is what allows cross-file relationships like
+      LibraryService  -->  Book
+      LibraryApp      -->  LibraryService
+    to be captured in CIR.
+    """
+    if req.language != "java":
+        raise HTTPException(
+            status_code=400,
+            detail="Only 'java' is supported for /parse/project at the moment.",
+        )
+
+    adapter = JavaAdapter()
+
+    # JavaAdapter.build_cir_graph_for_files expects file paths,
+    # so we materialize each file under a temporary directory.
+    with tempfile.TemporaryDirectory() as td:
+        paths: List[str] = []
+
+        for f in req.files:
+            path = os.path.join(td, f.filename)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(f.code)
+            paths.append(path)
+
+        graph = adapter.build_cir_graph_for_files(paths)  # type: ignore[arg-type]
+        cir = graph.to_debug_json()
+
+    return ProjectParseResponse(
+        language="java",
+        file_count=len(req.files),
+        cir=cir,
+    )
+
+
+# # ---------------------------------------------------------
+# # Local run (optional)
+# # ---------------------------------------------------------
+
+# if __name__ == "__main__":
+#     import uvicorn
+
+#     uvicorn.run(
+#         "main:app",
+#         host="127.0.0.1",
+#         port=7070,
+#         reload=True,
+#     )
+
