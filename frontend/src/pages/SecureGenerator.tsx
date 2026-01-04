@@ -24,6 +24,15 @@ type SemgrepReport = {
   stats?: Record<string, unknown>;
 };
 
+// UML report type
+type UmlReport = {
+  ok?: boolean;
+  file_count?: number;
+  error?: string | null;
+  class_svg?: string | null;
+  package_svg?: string | null;
+};
+
 type Report = {
   policy_version?: string;
   prompt_after_enhancement?: string;
@@ -32,6 +41,7 @@ type Report = {
     injection_patterns_detected?: string[];
     injection_blocked?: boolean;
   };
+  uml?: UmlReport;
 };
 
 type ApiResult = {
@@ -98,12 +108,15 @@ export default function App() {
   const [out, setOut] = useState<ApiResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [umlOpen, setUmlOpen] = useState(false);
+  const [umlTab, setUmlTab] = useState<"class" | "package">("class"); // which diagram is active
   const API = "http://localhost:8000/api/generate";
 
   const onGenerate = async () => {
     setLoading(true);
     setOut(null);
     setCopied(false);
+    setUmlOpen(false);
     try {
       const res = await fetch(API, {
         method: "POST",
@@ -126,6 +139,8 @@ export default function App() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const uml = out?.report?.uml;
 
   return (
     <div
@@ -298,6 +313,67 @@ export default function App() {
               >
                 {out.code}
               </pre>
+            </Section>
+
+
+            {/* UML summary + modal trigger */}
+            <Section title="📊 UML Diagrams (Get a better understanding of the code)">
+              {!uml || uml.error ? (
+                <div
+                  style={{
+                    padding: 12,
+                    background: "#fef2f2",
+                    borderRadius: 6,
+                    color: "#991b1b",
+                    fontSize: 13,
+                  }}
+                >
+                  {uml?.error
+                    ? `UML generation: ${uml.error}`
+                    : "No UML diagrams available for this generation (e.g. non-Java code)."}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#64748b" }}>
+                    <div>Files analysed for UML: {uml.file_count ?? 0}</div>
+                    <div>
+                      Class diagram: {uml.class_svg ? "✅ available" : "—"}
+                      {" · "}
+                      Package diagram: {uml.package_svg ? "✅ available" : "—"}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!uml) return;
+                      const defaultTab: "class" | "package" =
+                        uml.class_svg ? "class" : "package";
+                      setUmlTab(defaultTab);
+                      setUmlOpen(true);
+                    }}
+                    style={{
+                      padding: "10px 18px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#0ea5e9",
+                      color: "white",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    🧭 Open UML Viewer
+                  </button>
+                </div>
+              )}
             </Section>
 
             {/* SAST Report */}
@@ -490,6 +566,191 @@ export default function App() {
           Protected by OWASP LLM01 • Multi-Language Support • Powered by Gemini AI
         </div>
       </main>
+
+
+      {/* UML MODAL with diagram type selector */}
+      {umlOpen && uml && !uml.error && (
+        <div
+          onClick={() => setUmlOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 1100,
+              maxHeight: "90vh",
+              background: "#ffffff",
+              borderRadius: 12,
+              boxShadow: "0 20px 50px rgba(15,23,42,0.45)",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            {/* Modal header */}
+            <div
+              style={{
+                padding: "16px 20px 12px 20px",
+                borderBottom: "1px solid #e2e8f0",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16, color: "#0f172a" }}>UML Viewer</div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  View generated diagrams
+                </div>
+              </div>
+              <button
+                onClick={() => setUmlOpen(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  fontSize: 18,
+                  color: "#475569",
+                  padding: 4,
+                }}
+                aria-label="Close UML viewer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Diagram type tabs */}
+            <div
+              style={{
+                padding: "8px 16px 4px 16px",
+                borderBottom: "1px solid #e2e8f0",
+                display: "flex",
+                gap: 8,
+              }}
+            >
+              <button
+                onClick={() => uml.class_svg && setUmlTab("class")}
+                disabled={!uml.class_svg}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: umlTab === "class" ? "1px solid #0ea5e9" : "1px solid #cbd5e1",
+                  background: umlTab === "class" ? "#e0f2fe" : "#f8fafc",
+                  color: umlTab === "class" ? "#0369a1" : "#475569",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: uml.class_svg ? "pointer" : "not-allowed",
+                  opacity: uml.class_svg ? 1 : 0.4,
+                }}
+              >
+                Class Diagram
+              </button>
+              <button
+                onClick={() => uml.package_svg && setUmlTab("package")}
+                disabled={!uml.package_svg}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: umlTab === "package" ? "1px solid #0ea5e9" : "1px solid #cbd5e1",
+                  background: umlTab === "package" ? "#e0f2fe" : "#f8fafc",
+                  color: umlTab === "package" ? "#0369a1" : "#475569",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: uml.package_svg ? "pointer" : "not-allowed",
+                  opacity: uml.package_svg ? 1 : 0.4,
+                }}
+              >
+                Package Diagram
+              </button>
+            </div>
+
+            {/* Modal content: show only selected diagram */}
+            <div
+              style={{
+                padding: 16,
+                flex: 1,
+                overflow: "auto",
+                background: "#f8fafc",
+              }}
+            >
+              {umlTab === "class" && uml.class_svg && (
+                <div
+                  style={{
+                    background: "#ffffff",
+                    borderRadius: 8,
+                    border: "1px solid #e2e8f0",
+                    padding: 10,
+                    minHeight: 300,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#0f172a",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Class Diagram
+                  </div>
+                  <div
+                    style={{
+                      overflow: "auto",
+                      maxHeight: "70vh",
+                      borderRadius: 6,
+                      background: "#ffffff",
+                    }}
+                    dangerouslySetInnerHTML={{ __html: uml.class_svg }}
+                  />
+                </div>
+              )}
+
+              {umlTab === "package" && uml.package_svg && (
+                <div
+                  style={{
+                    background: "#ffffff",
+                    borderRadius: 8,
+                    border: "1px solid #e2e8f0",
+                    padding: 10,
+                    minHeight: 300,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#0f172a",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Package Diagram
+                  </div>
+                  <div
+                    style={{
+                      overflow: "auto",
+                      maxHeight: "70vh",
+                      borderRadius: 6,
+                      background: "#ffffff",
+                    }}
+                    dangerouslySetInnerHTML={{ __html: uml.package_svg }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; }
