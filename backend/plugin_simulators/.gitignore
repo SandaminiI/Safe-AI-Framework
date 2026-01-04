@@ -1,0 +1,31 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Env files
+.env
+*.env
+
+# Data (optional — keep large files out of git)
+data/raw/*
+data/processed/*
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
