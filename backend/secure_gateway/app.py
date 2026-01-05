@@ -21,8 +21,22 @@ from models import Base, Plugin, RequestLog
 from auth import save_root_ca_cert, load_root_ca_cert, verify_plugin_cert, issue_jwt, verify_jwt_token
 from trust_engine import update_plugin_trust
 from policy_engine import is_allowed
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Base.metadata.create_all(bind=engine)
 
