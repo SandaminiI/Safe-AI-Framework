@@ -29,3 +29,6 @@ data/processed/*
 Thumbs.db
 .vscode/
 .idea/
+
+# CA keys/certs (never commit private keys)
+keys/
