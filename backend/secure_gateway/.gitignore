@@ -29,3 +29,9 @@ data/processed/*
 Thumbs.db
 .vscode/
 .idea/
+
+# SQLite databases (security gateway runtime)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
