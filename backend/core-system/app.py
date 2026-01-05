@@ -11,6 +11,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from plugin_router import router as plugins_router
+
+
 
 from process_registry import (
     STORAGE_DIR, PROJECT_DIR, JAR_FILE, META_FILE,
@@ -27,7 +30,7 @@ app = FastAPI(title="Core System Loader API", version="0.8.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -733,3 +736,14 @@ def core_reset():
     except Exception: pass
 
     return {"ok": True, "message": "Project cleared."}
+
+
+# ==============================================================================
+# call plugins
+# ==============================================================================
+
+app.include_router(plugins_router, prefix="/core/plugins", tags=["plugins"])
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
