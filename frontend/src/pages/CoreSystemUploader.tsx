@@ -234,11 +234,11 @@ async function onStartPlugin() {
   alert(`Started: ${res.base_url}`);
 }
 
-async function onRunPlugin() {
-  if (!selectedPlugin) return alert("Select a plugin slug first");
-  const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
-  setPluginResult(JSON.stringify(res.result, null, 2));
-}
+// async function onRunPlugin() {
+//   if (!selectedPlugin) return alert("Select a plugin slug first");
+//   const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
+//   setPluginResult(JSON.stringify(res.result, null, 2));
+// }
 
 async function onStopPlugin() {
   if (!selectedPlugin) return alert("Select a plugin slug first");
@@ -836,9 +836,9 @@ async function onStopPlugin() {
       Start Plugin
     </button>
 
-    <button onClick={onRunPlugin} style={{ padding: "10px 14px", borderRadius: 8 }}>
+    {/* <button onClick={onRunPlugin} style={{ padding: "10px 14px", borderRadius: 8 }}>
       Run Plugin
-    </button>
+    </button> */}
 
     <button onClick={onStopPlugin} style={{ padding: "10px 14px", borderRadius: 8 }}>
       Stop Plugin
