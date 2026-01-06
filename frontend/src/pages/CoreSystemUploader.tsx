@@ -10,7 +10,7 @@ import PluginStudioPage from "./PluginStudioPage";
 import { startPlugin, runPlugin, stopPlugin } from "../api/pluginClient";
 
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8012";
 
 /* ----------------------------- Types ------------------------------ */
 type Status = {
@@ -967,20 +967,7 @@ async function onStopPlugin() {
             </div>
           </div>
         </Section>
-
-        {/* Footer */}
-        <div
-          style={{
-            marginTop: 16,
-            padding: 20,
-            textAlign: "center",
-            color: "rgba(255,255,255,0.92)",
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
-          Powered by Docker • MERN Ready • Core System Uploader
-        </div>
+        
       </main>
 
       <style>{`
