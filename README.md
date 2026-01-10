@@ -29,6 +29,11 @@ Secure Integration into the Core System
 
 
 ### 🔑 Secure Communication & Authentication Mechanism
+- Gateway-first access: All plugin → Core API calls go through the Secure Gateway instead of hitting Core directly.
+- Plugin identity (CA onboarding): Plugins obtain a CA-issued identity token/certificate (onboarding flow) before they are treated as trusted.
+- Request validation & enforcement: Gateway checks plugin identity + basic request rules before proxying to Core.
+- Trust-based decisions: Trust score + policy engine can mark plugins active / restricted / blocked and enforce it at runtime.
+- Audit & traceability: Every request is logged (plugin slug/instance, action, decision) into gateway.db for debugging and security review.
 
 
 ### 📊 Automated AI & Rule-Based Code Visualization (UML)
@@ -49,7 +54,5 @@ Secure Integration into the Core System
 - Performs real-time static code analysis
 - Detects hardcoded secrets and insecure patterns
 - Scans dependencies for known vulnerabilities (CVEs)
-
-Automatically replaces insecure code snippets
-
-Outputs validated, security-compliant code
+- Automatically replaces insecure code snippets
+- Outputs validated, security-compliant code
