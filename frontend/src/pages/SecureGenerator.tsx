@@ -324,7 +324,7 @@ export default function Securegenerator() {
               </pre>
             </Section>
 
-            {/* ✅ UML summary + modal trigger (ONLY PLACE WE ADD ICONS) */}
+            {/* UML summary + modal trigger */}
             <Section title="📊 UML Diagrams (Get a better understanding of the code)">
               {!uml || uml.error ? (
                 <div
@@ -358,22 +358,22 @@ export default function Securegenerator() {
 
                     <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        {uml.class_svg ? <CheckCircle2 size={16} /> : <MinusCircle size={16} />}
-                        Class diagram: {uml.class_svg ? "available" : "—"}
+                        Class diagram: {uml.class_svg ? <CheckCircle2 size={16} color="#16a34a"/> : <MinusCircle size={16} color="#16a34a"/>}
+                        {uml.class_svg ? "available" : "—"}
                       </span>
 
-                      <span style={{ opacity: 0.6 }}>·</span>
+                      <span style={{ opacity: 0.4 }}></span>
 
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        {uml.package_svg ? <CheckCircle2 size={16} /> : <MinusCircle size={16} />}
-                        Package diagram: {uml.package_svg ? "available" : "—"}
+                        Package diagram: {uml.package_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a" />}
+                        {uml.package_svg ? "available" : "—"}
                       </span>
 
-                      <span style={{ opacity: 0.6 }}>·</span>
+                      <span style={{ opacity: 0.4 }}></span>
 
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        {uml.sequence_svg ? <CheckCircle2 size={16} /> : <MinusCircle size={16} />}
-                        Sequence diagram: {uml.sequence_svg ? "available" : "—"}
+                        Sequence diagram: {uml.sequence_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
+                        {uml.sequence_svg ? "available" : "—"}
                       </span>
                     </div>
                   </div>
