@@ -21,6 +21,11 @@ def _parse_project_to_cir(java_files: Dict[str, str]) -> Dict[str, Any]:
     Given a map: rel_path -> abs_path for .java files,
     call parser-core /parse/project ONCE and get merged CIR.
     """
+    print("\n[UML PIPELINE] ===== PARSE PROJECT TO CIR =====")
+    print(f"[UML PIPELINE] Java files detected ({len(java_files)}):")
+    for rel in java_files.keys():
+        print(f"  - {rel}")
+
     files_payload: List[Dict[str, str]] = []
 
     for rel, abs_path in java_files.items():
@@ -38,12 +43,19 @@ def _parse_project_to_cir(java_files: Dict[str, str]) -> Dict[str, Any]:
         "files": files_payload,
     }
 
+    print("[UML PIPELINE] Sending files to parser-core /parse/project ...")
     resp = requests.post(PARSER_PROJECT_URL, json=payload, timeout=40)
     resp.raise_for_status()
     data = resp.json()
     cir = data.get("cir")
     if not cir:
+        print("[UML PIPELINE] ERROR: parser-core did not return CIR")
         raise RuntimeError("Project parse did not return CIR")
+
+    nodes = len(cir.get("nodes", []))
+    edges = len(cir.get("edges", []))
+    print(f"[UML PIPELINE] CIR received from parser-core: {nodes} nodes, {edges} edges")
+
     return cir
 
 
@@ -52,25 +64,41 @@ def _cir_to_plantuml_and_svg(cir: Dict[str, Any]) -> Dict[str, Any]:
     Given merged CIR, call uml-gen-regex and uml-renderer
     to produce class + package diagrams (PlantUML + SVG).
     """
+    print("\n[UML PIPELINE] ===== CIR -> UML (rule-based) =====")
     out: Dict[str, Any] = {}
 
     for diag_type in ("class", "package"):
+        print(f"[UML PIPELINE] Generating {diag_type.upper()} diagram ...")
+
         # CIR -> PlantUML
         uml_payload = {"cir": cir, "diagram_type": diag_type}
+        print(f"[UML PIPELINE]  -> POST {UML_URL} (diagram_type={diag_type})")
         uml_resp = requests.post(UML_URL, json=uml_payload, timeout=20)
         uml_resp.raise_for_status()
         uml_data = uml_resp.json()
         plantuml = uml_data.get("plantuml", "")
         out[f"{diag_type}_plantuml"] = plantuml
 
+        print(
+            f"[UML PIPELINE]  <- Received PlantUML for {diag_type} "
+            f"({len(plantuml.splitlines())} lines)"
+        )
+
         # PlantUML -> SVG
         render_payload = {"plantuml": plantuml}
+        print(f"[UML PIPELINE]  -> POST {RENDER_URL} (render to SVG)")
         render_resp = requests.post(RENDER_URL, json=render_payload, timeout=30)
         render_resp.raise_for_status()
         render_data = render_resp.json()
         svg = render_data.get("svg", "")
         out[f"{diag_type}_svg"] = svg
 
+        print(
+            f"[UML PIPELINE]  <- SVG generated for {diag_type} "
+            f"(length ~ {len(svg)} characters)"
+        )
+
+    print("[UML PIPELINE] Rule-based UML generation finished successfully.")
     return out
 
 
@@ -85,13 +113,25 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
     - Gets merged CIR (with cross-file relations)
     - Generates class + package SVG diagrams
     """
+    print("\n================= UML PIPELINE START =================")
     try:
         fence_lang, _ = strip_fence(code_blob)
+        print(f"[UML PIPELINE] Detected fence language: {fence_lang or 'unknown'}")
 
         with tempfile.TemporaryDirectory() as td:
             # Split LLM blob into physical files (same helper used by Semgrep)
             rel_to_abs = materialize_files(td, code_blob)
+            print(
+                f"[UML PIPELINE] Materialized {len(rel_to_abs)} file(s) from LLM output."
+            )
+            if rel_to_abs:
+                print("[UML PIPELINE] Files:")
+                for rel in sorted(rel_to_abs.keys()):
+                    print(f"  - {rel}")
+
             if not rel_to_abs:
+                print("[UML PIPELINE] ERROR: No files materialized from LLM output.")
+                print("================= UML PIPELINE END (ERROR) =================\n")
                 return {
                     "ok": False,
                     "file_count": 0,
@@ -102,6 +142,10 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
 
             # Language detection is only for info / error messages
             langs = detect_languages(sorted(rel_to_abs.keys()), fence_lang)
+            print(
+                f"[UML PIPELINE] Detected languages from filenames: "
+                f"{', '.join(langs) or 'unknown'}"
+            )
 
             # Only Java files will be used for UML for now
             java_files: Dict[str, str] = {
@@ -110,11 +154,20 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 if rel.lower().endswith(".java")
             }
 
+            print(
+                f"[UML PIPELINE] Java files selected for UML: {len(java_files)}"
+            )
             if not java_files:
+                msg = (
+                    f"No Java files in generated code "
+                    f"(languages detected: {', '.join(langs) or 'unknown'})"
+                )
+                print(f"[UML PIPELINE] WARNING: {msg}")
+                print("================= UML PIPELINE END (NO JAVA) ===============\n")
                 return {
                     "ok": False,
                     "file_count": len(rel_to_abs),
-                    "error": f"No Java files in generated code (languages detected: {', '.join(langs) or 'unknown'})",
+                    "error": msg,
                     "class_svg": None,
                     "package_svg": None,
                 }
@@ -125,6 +178,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             # CIR -> PlantUML + SVG
             uml_out = _cir_to_plantuml_and_svg(merged_cir)
 
+            print("================= UML PIPELINE END (OK) =====================\n")
             return {
                 "ok": True,
                 "file_count": len(java_files),
@@ -134,6 +188,9 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             }
 
     except Exception as e:
+        print("================= UML PIPELINE ERROR =================")
+        print(f"[UML PIPELINE] Exception: {type(e).__name__}: {e}")
+        print("=======================================================\n")
         return {
             "ok": False,
             "file_count": 0,
