@@ -1,4 +1,6 @@
+// Securegenerator.tsx
 import { useState } from "react";
+import UmlViewerModal from "../components/UmlViewerModal.tsx";
 
 /* ---------- Types ---------- */
 type SemgrepFinding = {
@@ -31,7 +33,7 @@ type UmlReport = {
   error?: string | null;
   class_svg?: string | null;
   package_svg?: string | null;
-  sequence_svg?: string | null; // <-- NEW
+  sequence_svg?: string | null;
 };
 
 type Report = {
@@ -103,14 +105,17 @@ const sevColor = (sev?: string) => {
   return "#64748b";
 };
 
-/* ---------- App ---------- */
-export default function App() {
+/* ---------- Component ---------- */
+export default function Securegenerator() {
   const [prompt, setPrompt] = useState("");
   const [out, setOut] = useState<ApiResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // UML state
   const [umlOpen, setUmlOpen] = useState(false);
-  const [umlTab, setUmlTab] = useState<"class" | "package" | "sequence">("class"); // <-- extended
+  const [umlTab, setUmlTab] = useState<"class" | "package" | "sequence">("class");
+
   const API = "http://localhost:8000/api/generate";
 
   const onGenerate = async () => {
@@ -158,7 +163,8 @@ export default function App() {
           width: "100%",
           maxWidth: "100%",
           margin: "0 auto",
-          fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif",
+          fontFamily:
+            "system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif",
         }}
       >
         {/* Header */}
@@ -207,6 +213,7 @@ export default function App() {
           >
             Describe the code you want to generate (any language)
           </label>
+
           <textarea
             rows={5}
             style={{
@@ -352,16 +359,12 @@ export default function App() {
                       Sequence diagram: {uml.sequence_svg ? "✅ available" : "—"}
                     </div>
                   </div>
+
                   <button
                     onClick={() => {
                       if (!uml) return;
-                      // choose default tab based on which diagrams exist
                       const defaultTab: "class" | "package" | "sequence" =
-                        uml.class_svg
-                          ? "class"
-                          : uml.package_svg
-                          ? "package"
-                          : "sequence";
+                        uml.class_svg ? "class" : uml.package_svg ? "package" : "sequence";
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
                     }}
@@ -424,7 +427,9 @@ export default function App() {
                     <div style={{ fontSize: 13, color: "#475569" }}>
                       <strong>Files:</strong> {out.report.semgrep.file_count ?? 0}
                     </div>
+
                     <Badge ok={Boolean(out.report.semgrep.findings?.length === 0)} />
+
                     <div style={{ fontSize: 13, color: "#64748b" }}>
                       {(out.report.semgrep.findings?.length ?? 0)} finding
                       {(out.report.semgrep.findings?.length ?? 0) === 1 ? "" : "s"}
@@ -574,235 +579,15 @@ export default function App() {
         </div>
       </main>
 
-      {/* UML MODAL with diagram type selector */}
-      {umlOpen && uml && !uml.error && (
-        <div
-          onClick={() => setUmlOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,23,42,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            padding: 16,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "100%",
-              maxWidth: 1100,
-              maxHeight: "90vh",
-              background: "#ffffff",
-              borderRadius: 12,
-              boxShadow: "0 20px 50px rgba(15,23,42,0.45)",
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-          >
-            {/* Modal header */}
-            <div
-              style={{
-                padding: "16px 20px 12px 20px",
-                borderBottom: "1px solid #e2e8f0",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 16, color: "#0f172a" }}>UML Viewer</div>
-                <div style={{ fontSize: 12, color: "#64748b" }}>View generated diagrams</div>
-              </div>
-              <button
-                onClick={() => setUmlOpen(false)}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  cursor: "pointer",
-                  fontSize: 18,
-                  color: "#475569",
-                  padding: 4,
-                }}
-                aria-label="Close UML viewer"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Diagram type tabs */}
-            <div
-              style={{
-                padding: "8px 16px 4px 16px",
-                borderBottom: "1px solid #e2e8f0",
-                display: "flex",
-                gap: 8,
-              }}
-            >
-              <button
-                onClick={() => uml.class_svg && setUmlTab("class")}
-                disabled={!uml.class_svg}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  border: umlTab === "class" ? "1px solid #0ea5e9" : "1px solid #cbd5e1",
-                  background: umlTab === "class" ? "#e0f2fe" : "#f8fafc",
-                  color: umlTab === "class" ? "#0369a1" : "#475569",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: uml.class_svg ? "pointer" : "not-allowed",
-                  opacity: uml.class_svg ? 1 : 0.4,
-                }}
-              >
-                Class Diagram
-              </button>
-              <button
-                onClick={() => uml.package_svg && setUmlTab("package")}
-                disabled={!uml.package_svg}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  border: umlTab === "package" ? "1px solid #0ea5e9" : "1px solid #cbd5e1",
-                  background: umlTab === "package" ? "#e0f2fe" : "#f8fafc",
-                  color: umlTab === "package" ? "#0369a1" : "#475569",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: uml.package_svg ? "pointer" : "not-allowed",
-                  opacity: uml.package_svg ? 1 : 0.4,
-                }}
-              >
-                Package Diagram
-              </button>
-              <button
-                onClick={() => uml.sequence_svg && setUmlTab("sequence")}
-                disabled={!uml.sequence_svg}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: 999,
-                  border: umlTab === "sequence" ? "1px solid #0ea5e9" : "1px solid #cbd5e1",
-                  background: umlTab === "sequence" ? "#e0f2fe" : "#f8fafc",
-                  color: umlTab === "sequence" ? "#0369a1" : "#475569",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: uml.sequence_svg ? "pointer" : "not-allowed",
-                  opacity: uml.sequence_svg ? 1 : 0.4,
-                }}
-              >
-                Sequence Diagram
-              </button>
-            </div>
-
-            {/* Modal content: show only selected diagram */}
-            <div
-              style={{
-                padding: 16,
-                flex: 1,
-                overflow: "auto",
-                background: "#f8fafc",
-              }}
-            >
-              {umlTab === "class" && uml.class_svg && (
-                <div
-                  style={{
-                    background: "#ffffff",
-                    borderRadius: 8,
-                    border: "1px solid #e2e8f0",
-                    padding: 10,
-                    minHeight: 300,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: "#0f172a",
-                      marginBottom: 6,
-                    }}
-                  >
-                    Class Diagram
-                  </div>
-                  <div
-                    style={{
-                      overflow: "auto",
-                      maxHeight: "70vh",
-                      borderRadius: 6,
-                      background: "#ffffff",
-                    }}
-                    dangerouslySetInnerHTML={{ __html: uml.class_svg }}
-                  />
-                </div>
-              )}
-
-              {umlTab === "package" && uml.package_svg && (
-                <div
-                  style={{
-                    background: "#ffffff",
-                    borderRadius: 8,
-                    border: "1px solid #e2e8f0",
-                    padding: 10,
-                    minHeight: 300,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: "#0f172a",
-                      marginBottom: 6,
-                    }}
-                  >
-                    Package Diagram
-                  </div>
-                  <div
-                    style={{
-                      overflow: "auto",
-                      maxHeight: "70vh",
-                      borderRadius: 6,
-                      background: "#ffffff",
-                    }}
-                    dangerouslySetInnerHTML={{ __html: uml.package_svg }}
-                  />
-                </div>
-              )}
-
-              {umlTab === "sequence" && uml.sequence_svg && (
-                <div
-                  style={{
-                    background: "#ffffff",
-                    borderRadius: 8,
-                    border: "1px solid #e2e8f0",
-                    padding: 10,
-                    minHeight: 300,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: "#0f172a",
-                      marginBottom: 6,
-                    }}
-                  >
-                    Sequence Diagram
-                  </div>
-                  <div
-                    style={{
-                      overflow: "auto",
-                      maxHeight: "70vh",
-                      borderRadius: 6,
-                      background: "#ffffff",
-                    }}
-                    dangerouslySetInnerHTML={{ __html: uml.sequence_svg }}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+      {/* UML Modal */}
+      {uml && !uml.error && (
+        <UmlViewerModal
+          open={umlOpen}
+          uml={uml}
+          tab={umlTab}
+          setTab={setUmlTab}
+          onClose={() => setUmlOpen(false)}
+        />
       )}
 
       <style>{`
