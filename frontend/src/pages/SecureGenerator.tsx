@@ -1,6 +1,7 @@
 // Securegenerator.tsx
 import { useState } from "react";
 import UmlViewerModal from "../components/UmlViewerModal.tsx";
+import { FileSearch, CheckCircle2, MinusCircle, Workflow } from "lucide-react";
 
 /* ---------- Types ---------- */
 type SemgrepFinding = {
@@ -323,7 +324,7 @@ export default function Securegenerator() {
               </pre>
             </Section>
 
-            {/* UML summary + modal trigger */}
+            {/* ✅ UML summary + modal trigger (ONLY PLACE WE ADD ICONS) */}
             <Section title="📊 UML Diagrams (Get a better understanding of the code)">
               {!uml || uml.error ? (
                 <div
@@ -350,13 +351,30 @@ export default function Securegenerator() {
                   }}
                 >
                   <div style={{ fontSize: 13, color: "#64748b" }}>
-                    <div>Files analysed for UML: {uml.file_count ?? 0}</div>
-                    <div>
-                      Class diagram: {uml.class_svg ? "✅ available" : "—"}
-                      {" · "}
-                      Package diagram: {uml.package_svg ? "✅ available" : "—"}
-                      {" · "}
-                      Sequence diagram: {uml.sequence_svg ? "✅ available" : "—"}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <FileSearch size={16} />
+                      <span>Files analysed for UML: {uml.file_count ?? 0}</span>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        {uml.class_svg ? <CheckCircle2 size={16} /> : <MinusCircle size={16} />}
+                        Class diagram: {uml.class_svg ? "available" : "—"}
+                      </span>
+
+                      <span style={{ opacity: 0.6 }}>·</span>
+
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        {uml.package_svg ? <CheckCircle2 size={16} /> : <MinusCircle size={16} />}
+                        Package diagram: {uml.package_svg ? "available" : "—"}
+                      </span>
+
+                      <span style={{ opacity: 0.6 }}>·</span>
+
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        {uml.sequence_svg ? <CheckCircle2 size={16} /> : <MinusCircle size={16} />}
+                        Sequence diagram: {uml.sequence_svg ? "available" : "—"}
+                      </span>
                     </div>
                   </div>
 
@@ -378,9 +396,13 @@ export default function Securegenerator() {
                       fontWeight: 600,
                       cursor: "pointer",
                       whiteSpace: "nowrap",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
                     }}
                   >
-                    🧭 Open UML Viewer
+                    <Workflow size={16} />
+                    Open UML Viewer
                   </button>
                 </div>
               )}

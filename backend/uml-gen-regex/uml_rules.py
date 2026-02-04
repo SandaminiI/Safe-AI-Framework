@@ -315,7 +315,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
 
     lines: List[str] = []
     lines.append("@startuml")
-    lines.append("title Static Interaction (from CIR associations)")
     lines.append("")
 
     if not participants:
