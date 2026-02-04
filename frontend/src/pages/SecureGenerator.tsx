@@ -31,6 +31,7 @@ type UmlReport = {
   error?: string | null;
   class_svg?: string | null;
   package_svg?: string | null;
+  sequence_svg?: string | null; // <-- NEW
 };
 
 type Report = {
@@ -109,7 +110,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [umlOpen, setUmlOpen] = useState(false);
-  const [umlTab, setUmlTab] = useState<"class" | "package">("class"); // which diagram is active
+  const [umlTab, setUmlTab] = useState<"class" | "package" | "sequence">("class"); // <-- extended
   const API = "http://localhost:8000/api/generate";
 
   const onGenerate = async () => {
@@ -315,7 +316,6 @@ export default function App() {
               </pre>
             </Section>
 
-
             {/* UML summary + modal trigger */}
             <Section title="📊 UML Diagrams (Get a better understanding of the code)">
               {!uml || uml.error ? (
@@ -348,13 +348,20 @@ export default function App() {
                       Class diagram: {uml.class_svg ? "✅ available" : "—"}
                       {" · "}
                       Package diagram: {uml.package_svg ? "✅ available" : "—"}
+                      {" · "}
+                      Sequence diagram: {uml.sequence_svg ? "✅ available" : "—"}
                     </div>
                   </div>
                   <button
                     onClick={() => {
                       if (!uml) return;
-                      const defaultTab: "class" | "package" =
-                        uml.class_svg ? "class" : "package";
+                      // choose default tab based on which diagrams exist
+                      const defaultTab: "class" | "package" | "sequence" =
+                        uml.class_svg
+                          ? "class"
+                          : uml.package_svg
+                          ? "package"
+                          : "sequence";
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
                     }}
@@ -567,7 +574,6 @@ export default function App() {
         </div>
       </main>
 
-
       {/* UML MODAL with diagram type selector */}
       {umlOpen && uml && !uml.error && (
         <div
@@ -610,9 +616,7 @@ export default function App() {
             >
               <div>
                 <div style={{ fontWeight: 700, fontSize: 16, color: "#0f172a" }}>UML Viewer</div>
-                <div style={{ fontSize: 12, color: "#64748b" }}>
-                  View generated diagrams
-                </div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>View generated diagrams</div>
               </div>
               <button
                 onClick={() => setUmlOpen(false)}
@@ -672,6 +676,23 @@ export default function App() {
                 }}
               >
                 Package Diagram
+              </button>
+              <button
+                onClick={() => uml.sequence_svg && setUmlTab("sequence")}
+                disabled={!uml.sequence_svg}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: umlTab === "sequence" ? "1px solid #0ea5e9" : "1px solid #cbd5e1",
+                  background: umlTab === "sequence" ? "#e0f2fe" : "#f8fafc",
+                  color: umlTab === "sequence" ? "#0369a1" : "#475569",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: uml.sequence_svg ? "pointer" : "not-allowed",
+                  opacity: uml.sequence_svg ? 1 : 0.4,
+                }}
+              >
+                Sequence Diagram
               </button>
             </div>
 
@@ -744,6 +765,38 @@ export default function App() {
                       background: "#ffffff",
                     }}
                     dangerouslySetInnerHTML={{ __html: uml.package_svg }}
+                  />
+                </div>
+              )}
+
+              {umlTab === "sequence" && uml.sequence_svg && (
+                <div
+                  style={{
+                    background: "#ffffff",
+                    borderRadius: 8,
+                    border: "1px solid #e2e8f0",
+                    padding: 10,
+                    minHeight: 300,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#0f172a",
+                      marginBottom: 6,
+                    }}
+                  >
+                    Sequence Diagram
+                  </div>
+                  <div
+                    style={{
+                      overflow: "auto",
+                      maxHeight: "70vh",
+                      borderRadius: 6,
+                      background: "#ffffff",
+                    }}
+                    dangerouslySetInnerHTML={{ __html: uml.sequence_svg }}
                   />
                 </div>
               )}
