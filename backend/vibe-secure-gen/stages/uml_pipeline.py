@@ -1,6 +1,7 @@
 # backend/vibe-secure-gen/stages/uml_pipeline.py
 
-import os
+from __future__ import annotations
+
 import tempfile
 from typing import Dict, Any, List
 
@@ -62,12 +63,13 @@ def _parse_project_to_cir(java_files: Dict[str, str]) -> Dict[str, Any]:
 def _cir_to_plantuml_and_svg(cir: Dict[str, Any]) -> Dict[str, Any]:
     """
     Given merged CIR, call uml-gen-regex and uml-renderer
-    to produce class + package diagrams (PlantUML + SVG).
+    to produce class + package + sequence diagrams (PlantUML + SVG).
     """
     print("\n[UML PIPELINE] ===== CIR -> UML (rule-based) =====")
     out: Dict[str, Any] = {}
 
-    for diag_type in ("class", "package"):
+    # now includes "sequence" as a third diagram type
+    for diag_type in ("class", "package", "sequence"):
         print(f"[UML PIPELINE] Generating {diag_type.upper()} diagram ...")
 
         # CIR -> PlantUML
@@ -111,7 +113,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
     - Filters Java files
     - Sends ALL Java files to /parse/project
     - Gets merged CIR (with cross-file relations)
-    - Generates class + package SVG diagrams
+    - Generates class + package + sequence SVG diagrams
     """
     print("\n================= UML PIPELINE START =================")
     try:
@@ -138,6 +140,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                     "error": "No files could be materialized from LLM output.",
                     "class_svg": None,
                     "package_svg": None,
+                    "sequence_svg": None,
                 }
 
             # Language detection is only for info / error messages
@@ -170,12 +173,13 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                     "error": msg,
                     "class_svg": None,
                     "package_svg": None,
+                    "sequence_svg": None,
                 }
 
             # Project-level parse: this sees types across files
             merged_cir = _parse_project_to_cir(java_files)
 
-            # CIR -> PlantUML + SVG
+            # CIR -> PlantUML + SVG (class + package + sequence)
             uml_out = _cir_to_plantuml_and_svg(merged_cir)
 
             print("================= UML PIPELINE END (OK) =====================\n")
@@ -185,6 +189,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 "error": None,
                 "class_svg": uml_out.get("class_svg"),
                 "package_svg": uml_out.get("package_svg"),
+                "sequence_svg": uml_out.get("sequence_svg"),
             }
 
     except Exception as e:
@@ -197,4 +202,5 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             "error": f"UML pipeline failed: {type(e).__name__}: {e}",
             "class_svg": None,
             "package_svg": None,
+            "sequence_svg": None,
         }
