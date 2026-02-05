@@ -35,6 +35,7 @@ type UmlReport = {
   class_svg?: string | null;
   package_svg?: string | null;
   sequence_svg?: string | null;
+  component_svg?: string | null;
 };
 
 type Report = {
@@ -115,7 +116,7 @@ export default function Securegenerator() {
 
   // UML state
   const [umlOpen, setUmlOpen] = useState(false);
-  const [umlTab, setUmlTab] = useState<"class" | "package" | "sequence">("class");
+  const [umlTab, setUmlTab] = useState<"class" | "package" | "sequence" | "component">("class");
 
   const API = "http://localhost:8000/api/generate";
 
@@ -379,8 +380,8 @@ export default function Securegenerator() {
                       <span style={{ opacity: 0.4 }}></span>
 
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        Component diagram: {uml.sequence_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
-                        {uml.sequence_svg ? "available" : "—"}
+                        Component diagram: {uml.component_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
+                        {uml.component_svg ? "available" : "—"}
                       </span>
                     </div>
                   </div>
@@ -388,7 +389,7 @@ export default function Securegenerator() {
                   <button
                     onClick={() => {
                       if (!uml) return;
-                      const defaultTab: "class" | "package" | "sequence" =
+                      const defaultTab: "class" | "package" | "sequence" | "component" =
                         uml.class_svg ? "class" : uml.package_svg ? "package" : "sequence";
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
