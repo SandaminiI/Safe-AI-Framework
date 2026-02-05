@@ -269,7 +269,7 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
 
 
 # ======================================================================
-#  SEQUENCE DIAGRAM GENERATION (NEW)
+#  SEQUENCE DIAGRAM GENERATION
 # ======================================================================
 
 def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
@@ -335,6 +335,84 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             continue
         seen.add((src, dst))
         lines.append(f"{src} -> {dst} : uses")
+
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+# ======================================================================
+#  COMPONENT DIAGRAM GENERATION
+# ======================================================================
+
+def generate_component_diagram(cir: Dict[str, Any]) -> str:
+    """
+    CIR JSON -> PlantUML component diagram.
+
+    - Each Java package becomes a UML component
+    - If any relationship (ASSOCIATES / DEPENDS_ON / INHERITS / IMPLEMENTS)
+      crosses package boundaries, we draw a dependency between components.
+    """
+    nodes_by_id, edges = _index_cir(cir)
+
+    # 1) Collect type nodes + their packages
+    type_nodes: Dict[str, Dict[str, Any]] = {}
+    package_by_type: Dict[str, str] = {}
+
+    for nid, n in nodes_by_id.items():
+        if n["kind"] != "TypeDecl":
+            continue
+        attrs = n["attrs"]
+        type_nodes[nid] = attrs
+        pkg = attrs.get("package") or "(default)"
+        package_by_type[nid] = pkg
+
+    # 2) Build set of packages and give each an alias for PlantUML
+    packages: Set[str] = set(package_by_type.values())
+    # alias map: "com.example.service" -> "comp_com_example_service"
+    pkg_alias: Dict[str, str] = {}
+    for pkg in sorted(packages):
+        alias = "comp_" + re.sub(r"[^a-zA-Z0-9_]", "_", pkg)
+        pkg_alias[pkg] = alias
+
+    lines: List[str] = []
+    lines.append("@startuml")
+    lines.append("skinparam componentStyle rectangle")
+
+    # 3) Declare components
+    for pkg in sorted(packages):
+        alias = pkg_alias[pkg]
+        if pkg == "(default)":
+            lines.append(f'component "(default package)" as {alias}')
+        else:
+            lines.append(f'component "{pkg}" as {alias}')
+
+    # 4) Compute inter-package dependencies based on edges between types
+    dep_set: Set[tuple[str, str]] = set()
+
+    for e in edges:
+        src = e["src"]
+        dst = e["dst"]
+        etype = e["type"]
+
+        if src not in type_nodes or dst not in type_nodes:
+            # we only care about type-to-type relations
+            continue
+
+        src_pkg = package_by_type.get(src, "(default)")
+        dst_pkg = package_by_type.get(dst, "(default)")
+        if src_pkg == dst_pkg:
+            continue  # same package, ignore for component diagram
+
+        # we treat these relation types as "component dependency"
+        if etype in ("ASSOCIATES", "DEPENDS_ON", "INHERITS", "IMPLEMENTS"):
+            dep_set.add((src_pkg, dst_pkg))
+
+    # 5) Emit component dependency arrows
+    for src_pkg, dst_pkg in sorted(dep_set):
+        src_alias = pkg_alias[src_pkg]
+        dst_alias = pkg_alias[dst_pkg]
+        # you can choose style; here we use simple dependency arrow
+        lines.append(f"{src_alias} ..> {dst_alias}")
 
     lines.append("@enduml")
     return "\n".join(lines)
