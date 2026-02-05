@@ -63,13 +63,13 @@ def _parse_project_to_cir(java_files: Dict[str, str]) -> Dict[str, Any]:
 def _cir_to_plantuml_and_svg(cir: Dict[str, Any]) -> Dict[str, Any]:
     """
     Given merged CIR, call uml-gen-regex and uml-renderer
-    to produce class + package + sequence diagrams (PlantUML + SVG).
+    to produce class + package + sequence + component diagrams (PlantUML + SVG).
     """
     print("\n[UML PIPELINE] ===== CIR -> UML (rule-based) =====")
     out: Dict[str, Any] = {}
 
     # now includes "sequence" as a third diagram type
-    for diag_type in ("class", "package", "sequence"):
+    for diag_type in ("class", "package", "sequence", "component"):
         print(f"[UML PIPELINE] Generating {diag_type.upper()} diagram ...")
 
         # CIR -> PlantUML
@@ -141,6 +141,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                     "class_svg": None,
                     "package_svg": None,
                     "sequence_svg": None,
+                    "component_svg": None,
                 }
 
             # Language detection is only for info / error messages
@@ -174,6 +175,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                     "class_svg": None,
                     "package_svg": None,
                     "sequence_svg": None,
+                    "component_svg": None,
                 }
 
             # Project-level parse: this sees types across files
@@ -190,6 +192,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 "class_svg": uml_out.get("class_svg"),
                 "package_svg": uml_out.get("package_svg"),
                 "sequence_svg": uml_out.get("sequence_svg"),
+                "component_svg": uml_out.get("component_svg"),
             }
 
     except Exception as e:
@@ -203,4 +206,5 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             "class_svg": None,
             "package_svg": None,
             "sequence_svg": None,
+            "component_svg": None,
         }
