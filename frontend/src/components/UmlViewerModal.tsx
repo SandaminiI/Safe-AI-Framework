@@ -14,6 +14,7 @@ type UmlReport = {
   class_svg?: string | null;
   package_svg?: string | null;
   sequence_svg?: string | null;
+  component_svg?: string | null; 
 };
 
 export default function UmlViewerModal({
@@ -25,8 +26,10 @@ export default function UmlViewerModal({
 }: {
   open: boolean;
   uml: UmlReport;
-  tab: "class" | "package" | "sequence";
-  setTab: React.Dispatch<React.SetStateAction<"class" | "package" | "sequence">>;
+  tab: "class" | "package" | "sequence" | "component"; // UPDATED
+  setTab: React.Dispatch<
+    React.SetStateAction<"class" | "package" | "sequence" | "component">
+  >; // UPDATED
   onClose: () => void;
 }) {
   if (!open || !uml || uml.error) return null;
@@ -86,8 +89,12 @@ export default function UmlViewerModal({
               <Eye size={18} color="#0369a1" />
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 16, color: "#0f172a" }}>UML Viewer</div>
-              <div style={{ fontSize: 12, color: "#64748b" }}>View generated diagrams</div>
+              <div style={{ fontWeight: 700, fontSize: 16, color: "#0f172a" }}>
+                UML Viewer
+              </div>
+              <div style={{ fontSize: 12, color: "#64748b" }}>
+                View generated diagrams
+              </div>
             </div>
           </div>
 
@@ -142,6 +149,14 @@ export default function UmlViewerModal({
             disabled={!uml.sequence_svg}
             onClick={() => uml.sequence_svg && setTab("sequence")}
           />
+          {/* NEW: Component Diagram tab */}
+          <TabButton
+            label="Component Diagram"
+            icon={<Box size={16} />} // reusing Box icon; you can swap later if you want
+            active={tab === "component"}
+            disabled={!uml.component_svg}
+            onClick={() => uml.component_svg && setTab("component")}
+          />
         </div>
 
         {/* Content */}
@@ -161,6 +176,9 @@ export default function UmlViewerModal({
           )}
           {tab === "sequence" && uml.sequence_svg && (
             <DiagramCard title="Sequence Diagram" svg={uml.sequence_svg} />
+          )}
+          {tab === "component" && uml.component_svg && (
+            <DiagramCard title="Component Diagram" svg={uml.component_svg} />
           )}
         </div>
 

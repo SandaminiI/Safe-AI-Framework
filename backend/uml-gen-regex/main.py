@@ -6,7 +6,8 @@ from uml_rules import (
     generate_plantuml_from_cir,  # default class diagram
     generate_class_diagram,
     generate_package_diagram,
-    generate_sequence_diagram,   # <-- NEW
+    generate_sequence_diagram,
+    generate_component_diagram,
 )
 
 app = FastAPI(title="UML Regex Generator (CIR -> PlantUML)")
@@ -14,7 +15,7 @@ app = FastAPI(title="UML Regex Generator (CIR -> PlantUML)")
 
 class UMLRegexRequest(BaseModel):
     cir: Dict[str, Any]
-    diagram_type: str = "class"  # "class", "package", or "sequence"
+    diagram_type: str = "class"  # "class", "package", "sequence", "component"
 
 
 class UMLRegexResponse(BaseModel):
@@ -36,6 +37,8 @@ def uml_regex(req: UMLRegexRequest):
         plantuml = generate_package_diagram(req.cir)
     elif dt == "sequence":
         plantuml = generate_sequence_diagram(req.cir)
+    elif dt == "component":
+        plantuml = generate_component_diagram(req.cir)    
     else:
         raise HTTPException(
             status_code=400,

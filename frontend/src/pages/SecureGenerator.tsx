@@ -375,6 +375,13 @@ export default function Securegenerator() {
                         Sequence diagram: {uml.sequence_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
                         {uml.sequence_svg ? "available" : "—"}
                       </span>
+
+                      <span style={{ opacity: 0.4 }}></span>
+
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        Component diagram: {uml.sequence_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
+                        {uml.sequence_svg ? "available" : "—"}
+                      </span>
                     </div>
                   </div>
 
