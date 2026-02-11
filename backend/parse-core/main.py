@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pydantic import BaseModel # type: ignore
 
 from adapters.java_adapter import JavaAdapter
+from detect import detect_language
 
 # ---------------------------------------------------------
 # FastAPI app + CORS
@@ -41,37 +42,35 @@ def health() -> Dict[str, str]:
 class DetectRequest(BaseModel):
     code: str
 
-
 class DetectResponse(BaseModel):
-    language: Literal["java", "python", "javascript", "unknown"]
+    language: Literal["java", "python", "javascript", "typescript", "unknown"]
+    confidence: float
+    reason: str
 
+# def _detect_language_from_code(code: str) -> str:
+#     """Very lightweight heuristic language detector for code."""
+#     snippet = code.lower()
 
-def _detect_language_from_code(code: str) -> str:
-    """Very lightweight heuristic language detector for code."""
-    snippet = code.lower()
+#     # Java
+#     if "package " in snippet or "public class " in snippet or "import java." in snippet:
+#         return "java"
 
-    # Java
-    if "package " in snippet or "public class " in snippet or "import java." in snippet:
-        return "java"
+#     # Python
+#     if "def " in snippet or "import " in snippet and "{" not in snippet and ";" not in snippet:
+#         return "python"
 
-    # Python
-    if "def " in snippet or "import " in snippet and "{" not in snippet and ";" not in snippet:
-        return "python"
+#     # JavaScript / TS
+#     if "function " in snippet or "=> {" in snippet or "import {" in snippet and " from " in snippet:
+#         return "javascript"
 
-    # JavaScript / TS
-    if "function " in snippet or "=> {" in snippet or "import {" in snippet and " from " in snippet:
-        return "javascript"
-
-    return "unknown"
-
+#     return "unknown"
 
 @app.post("/detect", response_model=DetectResponse)
 def detect(req: DetectRequest) -> DetectResponse:
-    lang = _detect_language_from_code(req.code or "")
-    # normalise to allowed literals
-    if lang not in ("java", "python", "javascript"):
-        lang = "unknown"
-    return DetectResponse(language=lang)  # type: ignore[arg-type]
+    lang, conf, reason = detect_language(req.code or "")
+    if lang not in ("java", "python", "javascript", "typescript"):
+        lang, conf, reason = "unknown", 0.0, "none"
+    return DetectResponse(language=lang, confidence=conf, reason=reason)
 
 
 # ---------------------------------------------------------
@@ -82,7 +81,7 @@ class ParseRequest(BaseModel):
     code: str
     filename: str
     # optional language; if not given, we try to detect
-    language: Optional[Literal["java", "python", "javascript"]] = None
+    language: Optional[Literal["java", "python", "javascript","typesript"]] = None
 
 
 class ParseResponse(BaseModel):
@@ -97,7 +96,12 @@ def parse(req: ParseRequest) -> ParseResponse:
     Parse a single code snippet into CIR.
     For now, only Java is supported.
     """
-    lang = req.language or _detect_language_from_code(req.code)
+    if req.language:
+        lang = req.language
+        conf, reason = 1.0, "explicit"
+    else:
+        lang, conf, reason = detect_language(req.code, filename=req.filename)
+
 
     if lang != "java":
         raise HTTPException(
