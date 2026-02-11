@@ -142,8 +142,6 @@ def _format_mods(obj: Dict[str, Any]) -> str:
         out.append("{static}")
     if "abstract" in mods or obj.get("is_abstract"):
         out.append("{abstract}")
-    if "final" in mods or obj.get("is_final"):
-        out.append("{final}")
     return " ".join(out)
 
 
@@ -164,6 +162,7 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
 
     lines: List[str] = []
     lines.append("@startuml")
+    lines.append("skinparam classAttributeIconSize 0")
     lines.append("set namespaceSeparator .")
 
     # ---------- Class / interface / enum blocks ----------
@@ -231,7 +230,7 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
 
             # constructors should NOT show return type
             if is_ctor:
-                lines.append(f"  {vis_symbol} {mods_prefix}<<create>> {method_name}({param_str})")
+                continue   # lines.append(f"  {vis_symbol} {mods_prefix}<<create>> {method_name}({param_str})")
             else:
                 return_type = m.get("return_type", "void")
                 raw_ret = m.get("raw_return_type") or return_type
