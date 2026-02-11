@@ -240,6 +240,7 @@ class JavaAdapter:
                         "id": field_id,
                         "element_type": logical_type,
                         "raw_type": raw_type,
+                        "multiplicity": multiplicity,
                     })
 
             # ---------- methods ----------
@@ -376,9 +377,10 @@ class JavaAdapter:
             # from field element types
             for f in u["fields"]:
                 tname = f["element_type"]
+                mult = f.get("multiplicity")
                 target = resolve_type_name(tname)
                 if target and target != src_id:
-                    graph.add_edge(src_id, target, "ASSOCIATES")
+                    graph.add_edge(src_id, target, "ASSOCIATES", multiplicity=mult)
 
             # from method/constructor params + return types
             for m in u["methods"]:
