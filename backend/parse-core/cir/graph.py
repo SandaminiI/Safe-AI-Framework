@@ -14,12 +14,8 @@ class CIRGraph:
     def add_node(self, node_id: str, kind: str, payload: Any) -> None:
         self.g.add_node(node_id, kind=kind, payload=payload)
 
-    def add_edge(self, src: str, dst: str, etype: str) -> None:
-        """
-        etype examples: HAS_FIELD, HAS_METHOD, INHERITS, IMPLEMENTS,
-                        ASSOCIATES, DEPENDS_ON, PARAM_OF, ...
-        """
-        self.g.add_edge(src, dst, etype=etype)
+    def add_edge(self, src: str, dst: str, etype: str, **attrs) -> None:
+        self.g.add_edge(src, dst, etype=etype, **attrs)
 
     def to_debug_json(self) -> Dict[str, Any]:
         """
@@ -41,10 +37,12 @@ class CIRGraph:
 
         edges = []
         for src, dst, data in self.g.edges(data=True):
+            edge_attrs = {k: v for k, v in data.items() if k != "etype"}
             edges.append({
                 "src": src,
                 "dst": dst,
                 "type": data.get("etype"),
+                "attrs": edge_attrs, 
             })
 
         return {"nodes": nodes, "edges": edges}

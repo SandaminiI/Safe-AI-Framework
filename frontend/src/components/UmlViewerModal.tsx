@@ -1,11 +1,5 @@
 import React from "react";
-import {
-  X,
-  Box,
-  Boxes,
-  GitBranch,
-  Eye,
-} from "lucide-react";
+import { X, Box, Boxes, GitBranch, Eye } from "lucide-react";
 
 type UmlReport = {
   ok?: boolean;
@@ -14,7 +8,7 @@ type UmlReport = {
   class_svg?: string | null;
   package_svg?: string | null;
   sequence_svg?: string | null;
-  component_svg?: string | null; 
+  component_svg?: string | null;
 };
 
 export default function UmlViewerModal({
@@ -26,10 +20,10 @@ export default function UmlViewerModal({
 }: {
   open: boolean;
   uml: UmlReport;
-  tab: "class" | "package" | "sequence" | "component"; // UPDATED
+  tab: "class" | "package" | "sequence" | "component";
   setTab: React.Dispatch<
     React.SetStateAction<"class" | "package" | "sequence" | "component">
-  >; // UPDATED
+  >;
   onClose: () => void;
 }) {
   if (!open || !uml || uml.error) return null;
@@ -149,10 +143,9 @@ export default function UmlViewerModal({
             disabled={!uml.sequence_svg}
             onClick={() => uml.sequence_svg && setTab("sequence")}
           />
-          {/* NEW: Component Diagram tab */}
           <TabButton
             label="Component Diagram"
-            icon={<Box size={16} />} // reusing Box icon; you can swap later if you want
+            icon={<Box size={16} />}
             active={tab === "component"}
             disabled={!uml.component_svg}
             onClick={() => uml.component_svg && setTab("component")}
@@ -182,11 +175,25 @@ export default function UmlViewerModal({
           )}
         </div>
 
-        {/* make embedded SVG scale better */}
+        {/* SVG rendering tweaks + remove underline */}
         <style>{`
           .uml-svg svg {
             width: 100% !important;
             height: auto !important;
+          }
+
+          /* ✅ Remove underline in PlantUML SVG */
+          .uml-svg svg text,
+          .uml-svg svg a,
+          .uml-svg svg a text {
+            text-decoration: none !important;
+          }
+
+          /* ✅ Prevent link-like styling */
+          .uml-svg svg a:link,
+          .uml-svg svg a:visited {
+            fill: inherit !important;
+            color: inherit !important;
           }
         `}</style>
       </div>
@@ -263,7 +270,9 @@ function DiagramCard({ title, svg }: { title: string; svg: string }) {
           marginBottom: 8,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{title}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+          {title}
+        </div>
       </div>
 
       <div
