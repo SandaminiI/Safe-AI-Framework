@@ -390,7 +390,7 @@ export default function Securegenerator() {
                     onClick={() => {
                       if (!uml) return;
                       const defaultTab: "class" | "package" | "sequence" | "component" =
-                        uml.class_svg ? "class" : uml.package_svg ? "package" : "sequence";
+                        uml.class_svg ? "class" : uml.package_svg ? "package" : uml.sequence_svg ? "sequence" : "component";
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
                     }}
