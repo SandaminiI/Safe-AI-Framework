@@ -145,20 +145,17 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
             method_name = m.get("name", "method")
             is_ctor = m.get("is_constructor", False)
 
-            # annotate constructors
-            if is_ctor:
-                display_name = f"<<create>> {method_name}"
-            else:
-                display_name = method_name
+            is_ctor = m.get("is_constructor", False)
 
+        if is_ctor:
+            lines.append(f"  {vis_symbol} <<create>> {method_name}()")
+        else:
             return_type = m.get("return_type", "void")
             raw_ret = m.get("raw_return_type") or return_type
             display_ret = _clean_type_for_display(raw_ret)
+            lines.append(f"  {vis_symbol} {method_name}() : {display_ret}")
 
-            # (simple version – no param list for now)
-            lines.append(f"  {vis_symbol} {display_name}() : {display_ret}")
-
-        lines.append("}")  # end class
+            lines.append("}")  # end class
 
     # ---------- Relationships (class-level) ----------
     relation_lines: Set[str] = set()
