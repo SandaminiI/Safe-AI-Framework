@@ -12,12 +12,16 @@ class JavaAdapter:
       - HAS_FIELD, HAS_METHOD, PARAM_OF
       - INHERITS, IMPLEMENTS
       - ASSOCIATES, DEPENDS_ON
+
     Includes:
       - Multi-file (project-level) support
       - Generics & collections (multiplicity heuristics)
       - Constructor detection
       - Modifier flags (static/abstract/final)
+      - Safer type resolution for duplicate short names (prefer same package)
+      - Association multiplicity carried onto ASSOCIATES edges
     """
+
     language = "java"
 
     # ---------------- Helpers ----------------
@@ -39,11 +43,7 @@ class JavaAdapter:
         Returns (is_static, is_abstract, is_final)
         """
         mods = mods or set()
-        return (
-            "static" in mods,
-            "abstract" in mods,
-            "final" in mods,
-        )
+        return ("static" in mods, "abstract" in mods, "final" in mods)
 
     def _resolve_type_name_and_multiplicity(self, t) -> Tuple[str, str, None | str]:
         """
@@ -65,7 +65,6 @@ class JavaAdapter:
         args = getattr(t, "arguments", None)
         if args:
             try:
-                # javalang's type arguments often wrap a .type
                 first_arg = args[0]
                 inner_type = getattr(first_arg, "type", first_arg)
                 inner_name = getattr(inner_type, "name", None)
@@ -74,23 +73,21 @@ class JavaAdapter:
                     raw_type = f"{base_name}<{inner_name}>"
                     multiplicity = "1..*"  # one-to-many
             except Exception:
-                # fall back if something unexpected
                 logical_type = base_name
                 raw_type = base_name
 
         # arrays: Type[]
         dims = getattr(t, "dimensions", None)
         if dims:
-            # treat as many
             multiplicity = multiplicity or "0..*"
             raw_type = f"{raw_type}[]"
 
-        # if it's a known collection type but we didn't see generic args
+        # known collection type but no generic args
         if base_name in self.COLLECTION_TYPES and multiplicity is None:
             multiplicity = "0..*"
 
         # default multiplicity for single values
-        if multiplicity is None and logical_type not in self.COLLECTION_TYPES:
+        if multiplicity is None and base_name not in self.COLLECTION_TYPES:
             multiplicity = "1"
 
         return logical_type, raw_type, multiplicity
@@ -105,15 +102,10 @@ class JavaAdapter:
         except Exception as e:
             raise ValueError(f"Failed to parse Java code: {e}")
 
-    # def build_cir_graph_for_code(self, code: str, filename: str | None = None) -> CIRGraph:
-    #     """
-    #     Single-compilation-unit helper (for /parse).
-    #     """
-    #     graph = CIRGraph()
-    #     self._process_compilation_unit(code, graph, type_nodes={}, units=[])
-    #     return graph
-
     def build_cir_graph_for_code(self, code: str, filename: str | None = None) -> CIRGraph:
+        """
+        Single-compilation-unit helper (for /parse).
+        """
         graph = CIRGraph()
         type_nodes: Dict[str, str] = {}
         units: List[Dict[str, Any]] = []
@@ -127,10 +119,9 @@ class JavaAdapter:
             source_file=filename,
         )
 
-        # now add INHERITS / IMPLEMENTS / ASSOCIATES / DEPENDS_ON edges
+        # add INHERITS / IMPLEMENTS / ASSOCIATES / DEPENDS_ON edges
         self._add_relationship_edges(graph, type_nodes, units)
         return graph
-
 
     def build_cir_graph_for_files(self, files: List[str]) -> CIRGraph:
         """
@@ -168,14 +159,13 @@ class JavaAdapter:
         package_name = getattr(getattr(tree, "package", None), "name", None)
 
         for t in tree.types:
-            # fully-qualified name if package exists
             short_name = t.name
             full_name = f"{package_name}.{short_name}" if package_name else short_name
 
             type_id = f"type:{full_name}"
             kind = type(t).__name__.replace("Declaration", "").lower()  # class/interface/enum
             visibility = self._visibility_from_mods(t.modifiers or set())
-            is_static, is_abstract, is_final = self._flags_from_mods(t.modifiers or set())
+            _, is_abstract, is_final = self._flags_from_mods(t.modifiers or set())
 
             type_decl = TypeDecl(
                 id=type_id,
@@ -190,7 +180,7 @@ class JavaAdapter:
             graph.add_node(type_id, "TypeDecl", type_decl)
             type_nodes[full_name] = type_id
 
-            unit = {
+            unit: Dict[str, Any] = {
                 "id": type_id,
                 "short_name": short_name,
                 "full_name": full_name,
@@ -204,7 +194,6 @@ class JavaAdapter:
             # extends / implements (store names, we'll resolve later)
             if hasattr(t, "extends") and t.extends:
                 try:
-                    # extends can be a single or list
                     if hasattr(t.extends, "name"):
                         names = [t.extends.name]
                     else:
@@ -221,35 +210,38 @@ class JavaAdapter:
                 logical_type, raw_type, multiplicity = self._resolve_type_name_and_multiplicity(field.type)
                 for decl in field.declarators:
                     field_id = f"field:{full_name}:{decl.name}"
-                    visibility = self._visibility_from_mods(field.modifiers or set())
-                    mods = field.modifiers or set()
+                    visibility_f = self._visibility_from_mods(field.modifiers or set())
+                    mods_f = field.modifiers or set()
 
                     field_node = Field(
                         id=field_id,
                         name=decl.name,
                         type_name=logical_type,
                         raw_type=raw_type,
-                        visibility=visibility,
-                        modifiers=tuple(mods),
+                        visibility=visibility_f,
+                        modifiers=tuple(mods_f),
                         multiplicity=multiplicity,
                     )
                     graph.add_node(field_id, "Field", field_node)
                     graph.add_edge(type_id, field_id, "HAS_FIELD")
 
-                    unit["fields"].append({
-                        "id": field_id,
-                        "element_type": logical_type,
-                        "raw_type": raw_type,
-                        "multiplicity": multiplicity,
-                    })
+                    # store multiplicity so _add_relationship_edges can attach it to ASSOCIATES edges
+                    unit["fields"].append(
+                        {
+                            "id": field_id,
+                            "element_type": logical_type,
+                            "raw_type": raw_type,
+                            "multiplicity": multiplicity,
+                        }
+                    )
 
             # ---------- methods ----------
             # 1) normal methods
             for method in getattr(t, "methods", []):
                 method_id = f"method:{full_name}:{method.name}"
-                visibility = self._visibility_from_mods(method.modifiers or set())
-                mods = method.modifiers or set()
-                is_static, is_abs, is_final = self._flags_from_mods(mods)
+                visibility_m = self._visibility_from_mods(method.modifiers or set())
+                mods_m = method.modifiers or set()
+                is_static, is_abs, is_final_m = self._flags_from_mods(mods_m)
 
                 logical_ret, raw_ret, _ = self._resolve_type_name_and_multiplicity(method.return_type)
 
@@ -258,17 +250,17 @@ class JavaAdapter:
                     name=method.name,
                     return_type=logical_ret,
                     raw_return_type=raw_ret,
-                    visibility=visibility,
-                    modifiers=tuple(mods),
+                    visibility=visibility_m,
+                    modifiers=tuple(mods_m),
                     is_constructor=False,
                     is_static=is_static,
                     is_abstract=is_abs,
-                    is_final=is_final,
+                    is_final=is_final_m,
                 )
                 graph.add_node(method_id, "Method", method_node)
                 graph.add_edge(type_id, method_id, "HAS_METHOD")
 
-                param_infos = []
+                param_infos: List[Dict[str, Any]] = []
                 for p in method.parameters:
                     p_id = f"param:{full_name}:{method.name}:{p.name}"
                     logical, raw, _ = self._resolve_type_name_and_multiplicity(p.type)
@@ -282,36 +274,31 @@ class JavaAdapter:
                     graph.add_edge(p_id, method_id, "PARAM_OF")
                     param_infos.append({"id": p_id, "type_name": logical})
 
-                unit["methods"].append({
-                    "id": method_id,
-                    "return_type": logical_ret,
-                    "params": param_infos,
-                })
+                unit["methods"].append({"id": method_id, "return_type": logical_ret, "params": param_infos})
 
             # 2) constructors
             for ctor in getattr(t, "constructors", []):
                 ctor_id = f"ctor:{full_name}:{ctor.name}"
-                visibility = self._visibility_from_mods(ctor.modifiers or set())
-                mods = ctor.modifiers or set()
-                is_static, is_abs, is_final = self._flags_from_mods(mods)
+                visibility_c = self._visibility_from_mods(ctor.modifiers or set())
+                mods_c = ctor.modifiers or set()
+                is_static, is_abs, is_final_c = self._flags_from_mods(mods_c)
 
-                # constructors have no return type, treat as void/raw="<ctor>"
                 method_node = Method(
                     id=ctor_id,
                     name=ctor.name,
                     return_type="void",
                     raw_return_type="<constructor>",
-                    visibility=visibility,
-                    modifiers=tuple(mods),
+                    visibility=visibility_c,
+                    modifiers=tuple(mods_c),
                     is_constructor=True,
                     is_static=is_static,
                     is_abstract=is_abs,
-                    is_final=is_final,
+                    is_final=is_final_c,
                 )
                 graph.add_node(ctor_id, "Method", method_node)
                 graph.add_edge(type_id, ctor_id, "HAS_METHOD")
 
-                param_infos = []
+                param_infos: List[Dict[str, Any]] = []
                 for p in ctor.parameters:
                     p_id = f"param:{full_name}:{ctor.name}:{p.name}"
                     logical, raw, _ = self._resolve_type_name_and_multiplicity(p.type)
@@ -325,11 +312,7 @@ class JavaAdapter:
                     graph.add_edge(p_id, ctor_id, "PARAM_OF")
                     param_infos.append({"id": p_id, "type_name": logical})
 
-                unit["methods"].append({
-                    "id": ctor_id,
-                    "return_type": "void",
-                    "params": param_infos,
-                })
+                unit["methods"].append({"id": ctor_id, "return_type": "void", "params": param_infos})
 
             units.append(unit)
 
@@ -342,55 +325,100 @@ class JavaAdapter:
         """
         Once all types/fields/methods are known, add:
           - INHERITS, IMPLEMENTS
-          - ASSOCIATES (field element types)
+          - ASSOCIATES (field element types) with multiplicity attribute
           - DEPENDS_ON (parameter/return types)
-        """
-        # For name resolution we use both full and short names (simple heuristic)
-        full_to_id = dict(type_nodes)
-        short_to_id: Dict[str, str] = {}
-        for full_name, nid in type_nodes.items():
-            short_name = full_name.split(".")[-1]
-            short_to_id.setdefault(short_name, nid)
 
-        def resolve_type_name(tname: str) -> str | None:
+        Safer resolution:
+          - Prefer exact full name match
+          - Otherwise resolve short name:
+              - if unique: use it
+              - if duplicates: prefer same package as src type
+              - if still ambiguous: ignore (avoid wrong edge)
+        """
+        # full name -> type node id
+        full_to_id: Dict[str, str] = dict(type_nodes)
+
+        # short name -> list of candidate ids
+        short_to_ids: Dict[str, List[str]] = {}
+        # type id -> full name
+        id_to_full: Dict[str, str] = {}
+
+        for full_name, nid in type_nodes.items():
+            id_to_full[nid] = full_name
+            short_name = full_name.split(".")[-1]
+            short_to_ids.setdefault(short_name, []).append(nid)
+
+        def _pkg(full_name: str) -> str:
+            parts = full_name.split(".")
+            return ".".join(parts[:-1]) if len(parts) > 1 else ""
+
+        def resolve_type_name(tname: str, src_id: str) -> str | None:
+            # 1) exact full match
             if tname in full_to_id:
                 return full_to_id[tname]
-            if tname in short_to_id:
-                return short_to_id[tname]
+
+            # 2) short-name match
+            candidates = short_to_ids.get(tname)
+            if not candidates:
+                return None
+            if len(candidates) == 1:
+                return candidates[0]
+
+            # 3) prefer same package as source type
+            src_full = id_to_full.get(src_id, "")
+            src_pkg = _pkg(src_full)
+
+            same_pkg = []
+            for cid in candidates:
+                c_full = id_to_full.get(cid, "")
+                if _pkg(c_full) == src_pkg:
+                    same_pkg.append(cid)
+
+            if len(same_pkg) == 1:
+                return same_pkg[0]
+
+            # ambiguous -> avoid wrong diagram edge
             return None
 
         for u in units:
             src_id = u["id"]
 
             # ---------- INHERITS / IMPLEMENTS ----------
-            for base in u["extends"]:
-                target = resolve_type_name(base)
+            for base in u.get("extends", []):
+                target = resolve_type_name(base, src_id)
                 if target and target != src_id:
                     graph.add_edge(src_id, target, "INHERITS")
 
-            for iface in u["implements"]:
-                target = resolve_type_name(iface)
+            for iface in u.get("implements", []):
+                target = resolve_type_name(iface, src_id)
                 if target and target != src_id:
                     graph.add_edge(src_id, target, "IMPLEMENTS")
 
-            # ---------- ASSOCIATES & DEPENDS_ON ----------
-            # from field element types
-            for f in u["fields"]:
-                tname = f["element_type"]
+            # ---------- ASSOCIATES ----------
+            for f in u.get("fields", []):
+                tname = f.get("element_type")
                 mult = f.get("multiplicity")
-                target = resolve_type_name(tname)
+                if not tname:
+                    continue
+                target = resolve_type_name(tname, src_id)
                 if target and target != src_id:
+                    # attach multiplicity as edge attribute
                     graph.add_edge(src_id, target, "ASSOCIATES", multiplicity=mult)
 
-            # from method/constructor params + return types
-            for m in u["methods"]:
-                for p in m["params"]:
-                    tname = p["type_name"]
-                    target = resolve_type_name(tname)
+            # ---------- DEPENDS_ON ----------
+            for m in u.get("methods", []):
+                # params
+                for p in m.get("params", []):
+                    tname = p.get("type_name")
+                    if not tname:
+                        continue
+                    target = resolve_type_name(tname, src_id)
                     if target and target != src_id:
                         graph.add_edge(src_id, target, "DEPENDS_ON")
 
-                rtype = m["return_type"]
-                target = resolve_type_name(rtype)
-                if target and target != src_id:
-                    graph.add_edge(src_id, target, "DEPENDS_ON")
+                # return type
+                rtype = m.get("return_type")
+                if rtype:
+                    target = resolve_type_name(rtype, src_id)
+                    if target and target != src_id:
+                        graph.add_edge(src_id, target, "DEPENDS_ON")
