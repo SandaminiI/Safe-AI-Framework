@@ -38,6 +38,9 @@ def _extract_types_and_members(
       - type_nodes: only TypeDecl nodes
       - fields_by_type: type_id -> [field attrs]
       - methods_by_type: type_id -> [method attrs]
+
+    NOTE: We keep the underlying node id in attrs as "_id" so we can
+    join method nodes to PARAM_OF edges later (for parameter printing).
     """
     type_nodes: Dict[str, Dict[str, Any]] = {}
     fields_by_type: Dict[str, List[Dict[str, Any]]] = {}
@@ -61,13 +64,45 @@ def _extract_types_and_members(
 
         if etype == "HAS_FIELD" and src in type_nodes and dst in nodes_by_id:
             field_node = nodes_by_id[dst]
-            fields_by_type[src].append(field_node.get("attrs", {}))
+            fa = dict(field_node.get("attrs", {}))
+            fa["_id"] = dst
+            fields_by_type[src].append(fa)
 
         if etype == "HAS_METHOD" and src in type_nodes and dst in nodes_by_id:
             method_node = nodes_by_id[dst]
-            methods_by_type[src].append(method_node.get("attrs", {}))
+            ma = dict(method_node.get("attrs", {}))
+            ma["_id"] = dst
+            methods_by_type[src].append(ma)
 
     return type_nodes, fields_by_type, methods_by_type
+
+
+def _index_params_by_method(
+    nodes_by_id: Dict[str, Dict[str, Any]],
+    edges: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Returns: method_node_id -> list of Parameter attrs (stable order)
+    Uses PARAM_OF edges: param -> method
+    """
+    method_to_params: Dict[str, List[Dict[str, Any]]] = {}
+
+    for e in edges:
+        if e.get("type") != "PARAM_OF":
+            continue
+
+        param_id = e.get("src")
+        method_id = e.get("dst")
+        if not param_id or not method_id:
+            continue
+
+        pnode = nodes_by_id.get(param_id)
+        if not pnode or pnode.get("kind") != "Parameter":
+            continue
+
+        method_to_params.setdefault(method_id, []).append(pnode.get("attrs", {}))
+
+    return method_to_params
 
 
 def _clean_type_for_display(raw_type: str) -> str:
@@ -91,6 +126,27 @@ def _clean_type_for_display(raw_type: str) -> str:
     return t
 
 
+def _format_mods(obj: Dict[str, Any]) -> str:
+    """
+    Render modifiers in PlantUML-friendly form.
+    Uses both tuple modifiers and boolean flags (is_static/is_abstract/is_final).
+    """
+    mods = obj.get("modifiers") or ()
+    if isinstance(mods, str):
+        mods = (mods,)
+    if isinstance(mods, set):
+        mods = tuple(mods)
+
+    out: List[str] = []
+    if "static" in mods or obj.get("is_static"):
+        out.append("{static}")
+    if "abstract" in mods or obj.get("is_abstract"):
+        out.append("{abstract}")
+    if "final" in mods or obj.get("is_final"):
+        out.append("{final}")
+    return " ".join(out)
+
+
 # ======================================================================
 #  CLASS DIAGRAM GENERATION
 # ======================================================================
@@ -104,6 +160,7 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
     type_nodes, fields_by_type, methods_by_type = _extract_types_and_members(
         nodes_by_id, edges
     )
+    params_by_method = _index_params_by_method(nodes_by_id, edges)
 
     lines: List[str] = []
     lines.append("@startuml")
@@ -113,8 +170,17 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
     for type_id, t in type_nodes.items():
         name = t.get("name", "UnknownType")
 
-        # For now we treat everything as 'class'. You can extend later using a 'kind' flag.
-        header = f"class {name} {{"
+        # use kind (class/interface/enum)
+        kind = (t.get("kind") or "class").lower()
+        if kind not in ("class", "interface", "enum"):
+            kind = "class"
+
+        # class modifiers
+        class_mods = _format_mods(t)
+        if class_mods:
+            header = f"{kind} {name} {class_mods} {{"
+        else:
+            header = f"{kind} {name} {{"
         lines.append(header)
 
         # --- fields ---
@@ -130,12 +196,15 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
             # regex-style cleanup of raw type for display
             display_type = _clean_type_for_display(raw_type)
 
-            # Optional: show multiplicity near type for fields
-            # (This is independent from relationship multiplicity arrows)
+            # Oshow multiplicity near type for fields
             if multiplicity and multiplicity not in ("1", ""):
                 display_type = f"{display_type} [{multiplicity}]"
 
-            lines.append(f"  {vis_symbol} {field_name} : {display_type}")
+            # field modifiers
+            f_mods = _format_mods(f)
+            mods_prefix = f"{f_mods} " if f_mods else ""
+
+            lines.append(f"  {vis_symbol} {mods_prefix}{field_name} : {display_type}")
 
         # --- methods ---
         for m in methods_by_type.get(type_id, []):
@@ -145,17 +214,31 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
             method_name = m.get("name", "method")
             is_ctor = m.get("is_constructor", False)
 
-            is_ctor = m.get("is_constructor", False)
+            # method modifiers
+            m_mods = _format_mods(m)
+            mods_prefix = f"{m_mods} " if m_mods else ""
 
-        if is_ctor:
-            lines.append(f"  {vis_symbol} <<create>> {method_name}()")
-        else:
-            return_type = m.get("return_type", "void")
-            raw_ret = m.get("raw_return_type") or return_type
-            display_ret = _clean_type_for_display(raw_ret)
-            lines.append(f"  {vis_symbol} {method_name}() : {display_ret}")
+            # params via PARAM_OF edges (param -> method)
+            method_node_id = m.get("_id")
+            params = params_by_method.get(method_node_id, []) if method_node_id else []
 
-            lines.append("}")  # end class
+            param_parts: List[str] = []
+            for p in params:
+                pname = p.get("name", "p")
+                ptype = p.get("raw_type") or p.get("type_name") or "Object"
+                param_parts.append(f"{pname}: {_clean_type_for_display(ptype)}")
+            param_str = ", ".join(param_parts)
+
+            # constructors should NOT show return type
+            if is_ctor:
+                lines.append(f"  {vis_symbol} {mods_prefix}<<create>> {method_name}({param_str})")
+            else:
+                return_type = m.get("return_type", "void")
+                raw_ret = m.get("raw_return_type") or return_type
+                display_ret = _clean_type_for_display(raw_ret)
+                lines.append(f"  {vis_symbol} {mods_prefix}{method_name}({param_str}) : {display_ret}")
+
+        lines.append("}")  # end type block
 
     # ---------- Relationships (class-level) ----------
     relation_lines: Set[str] = set()
@@ -185,8 +268,6 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
 
         elif etype == "ASSOCIATES":
             # print multiplicity if edge carries it
-            # Expected edge shape:
-            # { "src": "...", "dst": "...", "type": "ASSOCIATES", "attrs": {"multiplicity": "0..*"} }
             attrs = e.get("attrs") or {}
             mult = attrs.get("multiplicity")
 
@@ -243,16 +324,22 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
 
     # ---------- Package blocks ----------
     for pkg, types in package_to_types.items():
-        # Use quotes in case package name has dots
         if pkg == "(default)":
             for t in types:
                 name = t.get("name", "UnknownType")
-                lines.append(f"class {name}")
+                # ✅ use kind here too (optional, but consistent)
+                kind = (t.get("kind") or "class").lower()
+                if kind not in ("class", "interface", "enum"):
+                    kind = "class"
+                lines.append(f"{kind} {name}")
         else:
             lines.append(f'package "{pkg}" {{')
             for t in types:
                 name = t.get("name", "UnknownType")
-                lines.append(f"  class {name}")
+                kind = (t.get("kind") or "class").lower()
+                if kind not in ("class", "interface", "enum"):
+                    kind = "class"
+                lines.append(f"  {kind} {name}")
             lines.append("}")  # end package
 
     # ---------- Relationships (class-level) ----------
@@ -394,7 +481,6 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
 
     # 2) Build set of packages and give each an alias for PlantUML
     packages: Set[str] = set(package_by_type.values())
-    # alias map: "com.example.service" -> "comp_com_example_service"
     pkg_alias: Dict[str, str] = {}
     for pkg in sorted(packages):
         alias = "comp_" + re.sub(r"[^a-zA-Z0-9_]", "_", pkg)
@@ -424,15 +510,13 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
             continue
 
         if src not in type_nodes or dst not in type_nodes:
-            # we only care about type-to-type relations
             continue
 
         src_pkg = package_by_type.get(src, "(default)")
         dst_pkg = package_by_type.get(dst, "(default)")
         if src_pkg == dst_pkg:
-            continue  # same package, ignore for component diagram
+            continue
 
-        # we treat these relation types as "component dependency"
         if etype in ("ASSOCIATES", "DEPENDS_ON", "INHERITS", "IMPLEMENTS"):
             dep_set.add((src_pkg, dst_pkg))
 
