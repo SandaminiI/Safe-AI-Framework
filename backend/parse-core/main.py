@@ -143,6 +143,7 @@ class ProjectParseResponse(BaseModel):
     language: str
     file_count: int
     cir: Dict[str, Any]
+    parse_errors: List[Dict[str, str]] = []
 
 
 @app.post("/parse/project", response_model=ProjectParseResponse)
@@ -178,11 +179,13 @@ def parse_project(req: ProjectParseRequest) -> ProjectParseResponse:
 
         graph = adapter.build_cir_graph_for_files(paths)  # type: ignore[arg-type]
         cir = graph.to_debug_json()
+        cir["parse_errors"] = graph.g.graph.get("parse_errors", [])
 
     return ProjectParseResponse(
         language="java",
         file_count=len(req.files),
         cir=cir,
+        parse_errors=cir.get("parse_errors", []),
     )
 
 
