@@ -326,7 +326,7 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
         if pkg == "(default)":
             for t in types:
                 name = t.get("name", "UnknownType")
-                # ✅ use kind here too (optional, but consistent)
+                #  use kind here too (optional, but consistent)
                 kind = (t.get("kind") or "class").lower()
                 if kind not in ("class", "interface", "enum"):
                     kind = "class"
@@ -386,67 +386,142 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
 
 def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
     """
-    Very lightweight, static sequence diagram based on type-level
-    associations/dependencies in CIR.
+    Ordered sequence diagram based on CALLS edges (Option 1).
 
-    It does NOT analyse real execution order or method bodies.
-    It reads edges like:
-       TypeA --(ASSOCIATES/DEPENDS_ON)--> TypeB
-    and draws them as sequence "TypeA -> TypeB : uses".
+    Your JavaAdapter now emits:
+      - HAS_METHOD edges: TypeDecl -> Method
+      - CALLS edges: Method -> Method with attrs.order
+
+    This function:
+      1) Maps method -> owning class using HAS_METHOD
+      2) Reads CALLS edges (method-level, ordered)
+      3) Picks an entry method (prefer "main", else any caller)
+      4) Traverses calls in order and prints a sequence diagram
     """
     nodes_by_id, edges = _index_cir(cir)
 
-    # Build map: type_id -> name
+    # ---------------- Index nodes ----------------
     type_name_by_id: Dict[str, str] = {}
+    method_name_by_id: Dict[str, str] = {}
+
     for nid, n in nodes_by_id.items():
-        if n.get("kind") == "TypeDecl":
-            attrs = n.get("attrs", {})
+        kind = n.get("kind")
+        attrs = n.get("attrs", {}) or {}
+        if kind == "TypeDecl":
             type_name_by_id[nid] = attrs.get("name", nid)
+        elif kind == "Method":
+            method_name_by_id[nid] = attrs.get("name", nid)
 
-    participants: Set[str] = set()
-    calls: List[tuple[str, str]] = []
-
+    # method_id -> type_id (owner class)
+    method_owner: Dict[str, str] = {}
     for e in edges:
-        etype = e.get("type")
-        if etype not in ("ASSOCIATES", "DEPENDS_ON"):
+        if e.get("type") != "HAS_METHOD":
             continue
+        src = e.get("src")  # type
+        dst = e.get("dst")  # method
+        if src in type_name_by_id and dst in method_name_by_id:
+            method_owner[dst] = src
 
-        src_id = e.get("src")
-        dst_id = e.get("dst")
-        if src_id not in type_name_by_id or dst_id not in type_name_by_id:
+    # ---------------- Index CALLS edges ----------------
+    calls_by_src_method: Dict[str, List[Dict[str, Any]]] = {}
+    for e in edges:
+        if e.get("type") != "CALLS":
             continue
-
-        src_name = type_name_by_id[src_id]
-        dst_name = type_name_by_id[dst_id]
-        if src_name == dst_name:
+        src_m = e.get("src")
+        dst_m = e.get("dst")
+        if not src_m or not dst_m:
             continue
+        order = (e.get("attrs") or {}).get("order", 0)
+        calls_by_src_method.setdefault(src_m, []).append(
+            {"dst": dst_m, "order": order}
+        )
 
-        participants.add(src_name)
-        participants.add(dst_name)
-        calls.append((src_name, dst_name))
+    # ---------------- Pick entry method ----------------
+    # Prefer a method named "main" that has outgoing CALLS
+    entry_method_id: str | None = None
+    for mid, mname in method_name_by_id.items():
+        if mname == "main" and mid in calls_by_src_method:
+            entry_method_id = mid
+            break
+
+    # Fallback: first method that calls something
+    if entry_method_id is None:
+        entry_method_id = next(iter(calls_by_src_method.keys()), None)
 
     lines: List[str] = []
     lines.append("@startuml")
     lines.append("")
 
-    if not participants:
-        lines.append('note "No associations/dependencies found in CIR to build a sequence view." as N1')
+    if not entry_method_id:
+        lines.append('note "No CALLS edges found to build an ordered sequence diagram." as N1')
+        lines.append("@enduml")
+        return "\n".join(lines)
+
+    # ---------------- Traverse calls in order ----------------
+    participants: Set[str] = set()
+    seq_steps: List[tuple[str, str, str]] = []  # (srcClass, dstClass, label)
+
+    # prevent infinite recursion cycles
+    visiting: Set[str] = set()
+
+    def class_of_method(mid: str) -> str | None:
+        tid = method_owner.get(mid)
+        if not tid:
+            return None
+        return type_name_by_id.get(tid, tid)
+
+    def label_for_call(dst_mid: str) -> str:
+        mname = method_name_by_id.get(dst_mid, "call")
+        return f"{mname}()"
+
+    def walk(mid: str):
+        if mid in visiting:
+            return
+        visiting.add(mid)
+
+        outgoing = calls_by_src_method.get(mid, [])
+        outgoing_sorted = sorted(outgoing, key=lambda x: x.get("order", 0))
+
+        src_class = class_of_method(mid)
+        if not src_class:
+            visiting.remove(mid)
+            return
+
+        for item in outgoing_sorted:
+            dst_mid = item.get("dst")
+            if not dst_mid:
+                continue
+
+            dst_class = class_of_method(dst_mid)
+            if not dst_class:
+                continue
+
+            participants.add(src_class)
+            participants.add(dst_class)
+
+            seq_steps.append((src_class, dst_class, label_for_call(dst_mid)))
+
+            # go deeper
+            walk(dst_mid)
+
+        visiting.remove(mid)
+
+    walk(entry_method_id)
+
+    if not participants or not seq_steps:
+        lines.append('note "CALLS edges exist, but could not map method owners for sequence steps." as N2')
         lines.append("@enduml")
         return "\n".join(lines)
 
     # Declare participants
-    for name in sorted(participants):
-        lines.append(f"participant {name}")
+    for p in sorted(participants):
+        lines.append(f"participant {p}")
 
     lines.append("")
 
-    # Draw one arrow per unique pair, in stable order
-    seen: Set[tuple[str, str]] = set()
-    for src, dst in calls:
-        if (src, dst) in seen:
-            continue
-        seen.add((src, dst))
-        lines.append(f"{src} -> {dst} : uses")
+    # Emit messages in traversal order
+    for src_class, dst_class, label in seq_steps:
+        lines.append(f"{src_class} -> {dst_class} : {label}")
 
     lines.append("@enduml")
     return "\n".join(lines)
