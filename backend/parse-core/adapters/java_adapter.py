@@ -1,5 +1,5 @@
 import os
-import javalang # type: ignore
+import javalang  # type: ignore
 from typing import Dict, Any, List, Tuple
 from cir.model import TypeDecl, Field, Method, Parameter
 from cir.graph import CIRGraph
@@ -12,6 +12,7 @@ class JavaAdapter:
       - HAS_FIELD, HAS_METHOD, PARAM_OF
       - INHERITS, IMPLEMENTS
       - ASSOCIATES, DEPENDS_ON
+      - CALLS (ordered, from method bodies)
 
     Includes:
       - Multi-file (project-level) support
@@ -20,6 +21,8 @@ class JavaAdapter:
       - Modifier flags (static/abstract/final)
       - Safer type resolution for duplicate short names (prefer same package)
       - Association multiplicity carried onto ASSOCIATES edges
+      - Ordered call extraction for sequence diagrams
+      - Skips invalid Java files during project parsing (collect errors)
     """
 
     language = "java"
@@ -92,6 +95,96 @@ class JavaAdapter:
 
         return logical_type, raw_type, multiplicity
 
+    # ---------------- Call extraction ----------------
+
+    def _walk_ast_in_order(self, node):
+        """
+        Pre-order traversal that yields nodes in a stable source-like order.
+        """
+        if node is None:
+            return
+        yield node
+        children = getattr(node, "children", None)
+        if not children:
+            return
+        for c in children:
+            if c is None:
+                continue
+            if isinstance(c, (list, tuple)):
+                for item in c:
+                    yield from self._walk_ast_in_order(item)
+            else:
+                yield from self._walk_ast_in_order(c)
+
+    def _extract_ordered_calls(self, method_or_ctor) -> List[Dict[str, Any]]:
+        """
+        Extract ordered calls from a method/constructor body.
+
+        Returns list of:
+          {
+            "qualifier_kind": "none|super|static|new|var",
+            "qualifier": str,
+            "member": str,
+            "order": int
+          }
+        """
+        calls: List[Dict[str, Any]] = []
+        body = getattr(method_or_ctor, "body", None)
+        if not body:
+            return calls
+
+        nodes = body if isinstance(body, list) else [body]
+        order = 0
+
+        for stmt in nodes:
+            for n in self._walk_ast_in_order(stmt):
+                # new ClassName().method()
+                if isinstance(n, javalang.tree.ClassCreator):
+                    t = getattr(n, "type", None)
+                    cname = getattr(t, "name", "") if t else ""
+                    if cname:
+                        for sel in getattr(n, "selectors", []) or []:
+                            if isinstance(sel, javalang.tree.MethodInvocation):
+                                calls.append(
+                                    {
+                                        "qualifier_kind": "new",
+                                        "qualifier": cname,
+                                        "member": sel.member or "",
+                                        "order": order,
+                                    }
+                                )
+                                order += 1
+
+                # obj.method() OR method()
+                if isinstance(n, javalang.tree.MethodInvocation):
+                    q = n.qualifier or ""
+                    kind = "none"
+                    if q:
+                        kind = "static" if q[:1].isupper() else "var"
+                    calls.append(
+                        {
+                            "qualifier_kind": kind,
+                            "qualifier": q,
+                            "member": n.member or "",
+                            "order": order,
+                        }
+                    )
+                    order += 1
+
+                # super.method()
+                if isinstance(n, javalang.tree.SuperMethodInvocation):
+                    calls.append(
+                        {
+                            "qualifier_kind": "super",
+                            "qualifier": "super",
+                            "member": n.member or "",
+                            "order": order,
+                        }
+                    )
+                    order += 1
+
+        return calls
+
     # ---------------- Parsing entry points ----------------
 
     def parse_to_ast(self, code: str):
@@ -110,35 +203,35 @@ class JavaAdapter:
         type_nodes: Dict[str, str] = {}
         units: List[Dict[str, Any]] = []
 
-        # fill graph + collect type/field/method info
-        self._process_compilation_unit(
-            code,
-            graph,
-            type_nodes,
-            units,
-            source_file=filename,
-        )
-
-        # add INHERITS / IMPLEMENTS / ASSOCIATES / DEPENDS_ON edges
+        self._process_compilation_unit(code, graph, type_nodes, units, source_file=filename)
         self._add_relationship_edges(graph, type_nodes, units)
         return graph
 
     def build_cir_graph_for_files(self, files: List[str]) -> CIRGraph:
         """
         Multi-file/project-level CIRGraph builder.
-        'files' is a list of .java file paths.
+        Skips invalid Java files but continues parsing the rest.
         """
         graph = CIRGraph()
         type_nodes: Dict[str, str] = {}
         units: List[Dict[str, Any]] = []
 
-        for path in files:
-            with open(path, "r", encoding="utf-8") as f:
-                code = f.read()
-            self._process_compilation_unit(code, graph, type_nodes, units, source_file=path)
+        errors: List[Dict[str, str]] = []
 
-        # once all types are known, add inheritance + associations/depends
+        for path in files:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    code = f.read()
+                self._process_compilation_unit(code, graph, type_nodes, units, source_file=path)
+            except ValueError as e:
+                errors.append({"file": path, "error": str(e)})
+                continue
+
         self._add_relationship_edges(graph, type_nodes, units)
+
+        # attach errors so API can return them
+        graph.g.graph["parse_errors"] = errors
+
         return graph
 
     # ---------------- Core processing ----------------
@@ -151,10 +244,6 @@ class JavaAdapter:
         units: List[Dict[str, Any]],
         source_file: str | None = None,
     ) -> None:
-        """
-        Process one compilation unit (one .java file), add nodes and basic edges.
-        'type_nodes' and 'units' are shared across files for project-level graphs.
-        """
         tree = self.parse_to_ast(code)
         package_name = getattr(getattr(tree, "package", None), "name", None)
 
@@ -163,7 +252,7 @@ class JavaAdapter:
             full_name = f"{package_name}.{short_name}" if package_name else short_name
 
             type_id = f"type:{full_name}"
-            kind = type(t).__name__.replace("Declaration", "").lower()  # class/interface/enum
+            kind = type(t).__name__.replace("Declaration", "").lower()
             visibility = self._visibility_from_mods(t.modifiers or set())
             _, is_abstract, is_final = self._flags_from_mods(t.modifiers or set())
 
@@ -188,10 +277,10 @@ class JavaAdapter:
                 "methods": [],
                 "extends": [],
                 "implements": [],
+                "calls": [],
                 "source_file": source_file,
             }
 
-            # extends / implements (store names, we'll resolve later)
             if hasattr(t, "extends") and t.extends:
                 try:
                     if hasattr(t.extends, "name"):
@@ -225,10 +314,10 @@ class JavaAdapter:
                     graph.add_node(field_id, "Field", field_node)
                     graph.add_edge(type_id, field_id, "HAS_FIELD")
 
-                    # store multiplicity so _add_relationship_edges can attach it to ASSOCIATES edges
                     unit["fields"].append(
                         {
                             "id": field_id,
+                            "name": decl.name,
                             "element_type": logical_type,
                             "raw_type": raw_type,
                             "multiplicity": multiplicity,
@@ -236,7 +325,6 @@ class JavaAdapter:
                     )
 
             # ---------- methods ----------
-            # 1) normal methods
             for method in getattr(t, "methods", []):
                 method_id = f"method:{full_name}:{method.name}"
                 visibility_m = self._visibility_from_mods(method.modifiers or set())
@@ -272,11 +360,22 @@ class JavaAdapter:
                     )
                     graph.add_node(p_id, "Parameter", param_node)
                     graph.add_edge(p_id, method_id, "PARAM_OF")
-                    param_infos.append({"id": p_id, "type_name": logical})
+                    param_infos.append({"id": p_id, "name": p.name, "type_name": logical})
 
-                unit["methods"].append({"id": method_id, "return_type": logical_ret, "params": param_infos})
+                extracted = self._extract_ordered_calls(method)
+                for c in extracted:
+                    unit["calls"].append({"src_method_id": method_id, **c})
 
-            # 2) constructors
+                unit["methods"].append(
+                    {
+                        "id": method_id,
+                        "name": method.name,
+                        "return_type": logical_ret,
+                        "params": param_infos,
+                    }
+                )
+
+            # ---------- constructors ----------
             for ctor in getattr(t, "constructors", []):
                 ctor_id = f"ctor:{full_name}:{ctor.name}"
                 visibility_c = self._visibility_from_mods(ctor.modifiers or set())
@@ -310,9 +409,20 @@ class JavaAdapter:
                     )
                     graph.add_node(p_id, "Parameter", param_node)
                     graph.add_edge(p_id, ctor_id, "PARAM_OF")
-                    param_infos.append({"id": p_id, "type_name": logical})
+                    param_infos.append({"id": p_id, "name": p.name, "type_name": logical})
 
-                unit["methods"].append({"id": ctor_id, "return_type": "void", "params": param_infos})
+                extracted = self._extract_ordered_calls(ctor)
+                for c in extracted:
+                    unit["calls"].append({"src_method_id": ctor_id, **c})
+
+                unit["methods"].append(
+                    {
+                        "id": ctor_id,
+                        "name": ctor.name,
+                        "return_type": "void",
+                        "params": param_infos,
+                    }
+                )
 
             units.append(unit)
 
@@ -322,19 +432,6 @@ class JavaAdapter:
         type_nodes: Dict[str, str],
         units: List[Dict[str, Any]],
     ) -> None:
-        """
-        Once all types/fields/methods are known, add:
-          - INHERITS, IMPLEMENTS
-          - ASSOCIATES (field element types) with multiplicity attribute
-          - DEPENDS_ON (parameter/return types)
-
-        Safer resolution:
-          - Prefer exact full name match
-          - Otherwise resolve short name:
-              - if unique: use it
-              - if duplicates: prefer same package as src type
-              - if still ambiguous: ignore (avoid wrong edge)
-        """
         # full name -> type node id
         full_to_id: Dict[str, str] = dict(type_nodes)
 
@@ -353,18 +450,15 @@ class JavaAdapter:
             return ".".join(parts[:-1]) if len(parts) > 1 else ""
 
         def resolve_type_name(tname: str, src_id: str) -> str | None:
-            # 1) exact full match
             if tname in full_to_id:
                 return full_to_id[tname]
 
-            # 2) short-name match
             candidates = short_to_ids.get(tname)
             if not candidates:
                 return None
             if len(candidates) == 1:
                 return candidates[0]
 
-            # 3) prefer same package as source type
             src_full = id_to_full.get(src_id, "")
             src_pkg = _pkg(src_full)
 
@@ -377,8 +471,17 @@ class JavaAdapter:
             if len(same_pkg) == 1:
                 return same_pkg[0]
 
-            # ambiguous -> avoid wrong diagram edge
             return None
+
+        # method lookup: (type_id, method_name) -> method_id
+        method_index: Dict[tuple[str, str], str] = {}
+        for u in units:
+            owner_type_id = u["id"]
+            for m in u.get("methods", []):
+                mid = m.get("id")
+                mname = m.get("name")
+                if mid and mname:
+                    method_index[(owner_type_id, mname)] = mid
 
         for u in units:
             src_id = u["id"]
@@ -402,12 +505,10 @@ class JavaAdapter:
                     continue
                 target = resolve_type_name(tname, src_id)
                 if target and target != src_id:
-                    # attach multiplicity as edge attribute
                     graph.add_edge(src_id, target, "ASSOCIATES", multiplicity=mult)
 
             # ---------- DEPENDS_ON ----------
             for m in u.get("methods", []):
-                # params
                 for p in m.get("params", []):
                     tname = p.get("type_name")
                     if not tname:
@@ -416,9 +517,67 @@ class JavaAdapter:
                     if target and target != src_id:
                         graph.add_edge(src_id, target, "DEPENDS_ON")
 
-                # return type
                 rtype = m.get("return_type")
                 if rtype:
                     target = resolve_type_name(rtype, src_id)
                     if target and target != src_id:
                         graph.add_edge(src_id, target, "DEPENDS_ON")
+
+            # ---------- CALLS ----------
+            field_type_by_name: Dict[str, str] = {}
+            for f in u.get("fields", []):
+                fname = f.get("name")
+                ftype = f.get("element_type")
+                if fname and ftype:
+                    field_type_by_name[fname] = ftype
+
+            method_param_types: Dict[str, Dict[str, str]] = {}
+            for m in u.get("methods", []):
+                mid = m.get("id")
+                if not mid:
+                    continue
+                pm: Dict[str, str] = {}
+                for p in m.get("params", []):
+                    pname = p.get("name")
+                    ptype = p.get("type_name")
+                    if pname and ptype:
+                        pm[pname] = ptype
+                method_param_types[mid] = pm
+
+            for c in u.get("calls", []):
+                src_method_id = c.get("src_method_id")
+                qkind = c.get("qualifier_kind")
+                qual = (c.get("qualifier") or "").strip()
+                member = (c.get("member") or "").strip()
+                order = c.get("order", 0)
+
+                if not src_method_id or not member:
+                    continue
+
+                target_type_id = src_id
+
+                if qkind == "super":
+                    target_type_id = src_id
+
+                elif qkind in ("static", "new"):
+                    tid = resolve_type_name(qual, src_id)
+                    if not tid:
+                        continue
+                    target_type_id = tid
+
+                elif qkind == "var":
+                    var_type = field_type_by_name.get(qual)
+                    if not var_type:
+                        var_type = method_param_types.get(src_method_id, {}).get(qual)
+                    if not var_type:
+                        continue
+                    tid = resolve_type_name(var_type, src_id)
+                    if not tid:
+                        continue
+                    target_type_id = tid
+
+                dst_method_id = method_index.get((target_type_id, member))
+                if not dst_method_id:
+                    continue
+
+                graph.add_edge(src_method_id, dst_method_id, "CALLS", order=order)
