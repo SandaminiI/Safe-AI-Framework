@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException  # type: ignore
 from pydantic import BaseModel  # type: ignore
 from typing import Any, Dict
+from uml_validate import validate_plantuml
 
 from uml_rules import (
     generate_plantuml_from_cir,  # default class diagram
@@ -19,7 +20,9 @@ class UMLRegexRequest(BaseModel):
 
 
 class UMLRegexResponse(BaseModel):
-    plantuml: str
+    ok: bool = True
+    plantuml: str = ""
+    validation_errors: list[str] = []
 
 
 @app.get("/health")
@@ -38,14 +41,15 @@ def uml_regex(req: UMLRegexRequest):
     elif dt == "sequence":
         plantuml = generate_sequence_diagram(req.cir)
     elif dt == "component":
-        plantuml = generate_component_diagram(req.cir)    
+        plantuml = generate_component_diagram(req.cir)
     else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported diagram_type: {req.diagram_type}",
-        )
+        raise HTTPException(status_code=400, detail=f"Unsupported diagram_type: {req.diagram_type}")
 
-    return UMLRegexResponse(plantuml=plantuml)
+    ok, errs = validate_plantuml(plantuml)
+    if not ok:
+        return UMLRegexResponse(ok=False, plantuml=plantuml, validation_errors=errs)
+
+    return UMLRegexResponse(ok=True, plantuml=plantuml, validation_errors=[])
 
 
 # Optional: run locally

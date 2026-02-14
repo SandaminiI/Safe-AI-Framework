@@ -28,6 +28,15 @@ type SemgrepReport = {
 };
 
 // UML report type
+type UmlValidationEntry = {
+  ok: boolean;
+  errors: string[];
+};
+
+type UmlValidationMap = Partial<
+  Record<"class" | "package" | "sequence" | "component", UmlValidationEntry>
+>;
+
 type UmlReport = {
   ok?: boolean;
   file_count?: number;
@@ -36,6 +45,7 @@ type UmlReport = {
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
+  validation?: UmlValidationMap;
 };
 
 type Report = {
