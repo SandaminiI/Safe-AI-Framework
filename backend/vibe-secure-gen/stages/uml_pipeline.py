@@ -32,22 +32,14 @@ def _parse_project_to_cir(java_files: Dict[str, str]) -> Dict[str, Any]:
     for rel, abs_path in java_files.items():
         with open(abs_path, "r", encoding="utf-8") as f:
             code = f.read()
-        files_payload.append(
-            {
-                "filename": rel,
-                "code": code,
-            }
-        )
+        files_payload.append({"filename": rel, "code": code})
 
-    payload = {
-        "language": "java",
-        "files": files_payload,
-    }
+    payload = {"language": "java", "files": files_payload}
 
     print("[UML PIPELINE] Sending files to parser-core /parse/project ...")
     resp = requests.post(PARSER_PROJECT_URL, json=payload, timeout=40)
     resp.raise_for_status()
-    data = resp.json()
+    data = resp.json() or {}
     cir = data.get("cir")
     if not cir:
         print("[UML PIPELINE] ERROR: parser-core did not return CIR")
@@ -68,31 +60,47 @@ def _cir_to_plantuml_and_svg(cir: Dict[str, Any]) -> Dict[str, Any]:
     print("\n[UML PIPELINE] ===== CIR -> UML (rule-based) =====")
     out: Dict[str, Any] = {}
 
-    # now includes "sequence" as a third diagram type
+    # store per-diagram validation info
+    out["validation"] = {}
+
     for diag_type in ("class", "package", "sequence", "component"):
         print(f"[UML PIPELINE] Generating {diag_type.upper()} diagram ...")
 
-        # CIR -> PlantUML
+        # CIR -> PlantUML (with validation)
         uml_payload = {"cir": cir, "diagram_type": diag_type}
         print(f"[UML PIPELINE]  -> POST {UML_URL} (diagram_type={diag_type})")
         uml_resp = requests.post(UML_URL, json=uml_payload, timeout=20)
         uml_resp.raise_for_status()
-        uml_data = uml_resp.json()
-        plantuml = uml_data.get("plantuml", "")
+
+        uml_data = uml_resp.json() or {}
+        plantuml = uml_data.get("plantuml", "") or ""
+        ok = bool(uml_data.get("ok", True))  # backward compatible default True
+        validation_errors = uml_data.get("validation_errors") or []
+
         out[f"{diag_type}_plantuml"] = plantuml
+        out["validation"][diag_type] = {
+            "ok": ok,
+            "errors": validation_errors,
+        }
 
         print(
-            f"[UML PIPELINE]  <- Received PlantUML for {diag_type} "
-            f"({len(plantuml.splitlines())} lines)"
+            f"[UML PIPELINE]  <- PlantUML for {diag_type} "
+            f"({len(plantuml.splitlines())} lines) | ok={ok} | errors={len(validation_errors)}"
         )
+
+        # If validation failed, do NOT render SVG
+        if not ok:
+            out[f"{diag_type}_svg"] = None
+            print(f"[UML PIPELINE]  !! Skipping SVG render (validation failed) for {diag_type}")
+            continue
 
         # PlantUML -> SVG
         render_payload = {"plantuml": plantuml}
         print(f"[UML PIPELINE]  -> POST {RENDER_URL} (render to SVG)")
         render_resp = requests.post(RENDER_URL, json=render_payload, timeout=30)
         render_resp.raise_for_status()
-        render_data = render_resp.json()
-        svg = render_data.get("svg", "")
+        render_data = render_resp.json() or {}
+        svg = render_data.get("svg", "") or ""
         out[f"{diag_type}_svg"] = svg
 
         print(
@@ -113,7 +121,8 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
     - Filters Java files
     - Sends ALL Java files to /parse/project
     - Gets merged CIR (with cross-file relations)
-    - Generates class + package + sequence SVG diagrams
+    - Generates class + package + sequence + component SVG diagrams
+    - Returns validation results per diagram
     """
     print("\n================= UML PIPELINE START =================")
     try:
@@ -123,9 +132,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
         with tempfile.TemporaryDirectory() as td:
             # Split LLM blob into physical files (same helper used by Semgrep)
             rel_to_abs = materialize_files(td, code_blob)
-            print(
-                f"[UML PIPELINE] Materialized {len(rel_to_abs)} file(s) from LLM output."
-            )
+            print(f"[UML PIPELINE] Materialized {len(rel_to_abs)} file(s) from LLM output.")
             if rel_to_abs:
                 print("[UML PIPELINE] Files:")
                 for rel in sorted(rel_to_abs.keys()):
@@ -142,6 +149,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                     "package_svg": None,
                     "sequence_svg": None,
                     "component_svg": None,
+                    "validation": {},
                 }
 
             # Language detection is only for info / error messages
@@ -158,9 +166,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 if rel.lower().endswith(".java")
             }
 
-            print(
-                f"[UML PIPELINE] Java files selected for UML: {len(java_files)}"
-            )
+            print(f"[UML PIPELINE] Java files selected for UML: {len(java_files)}")
             if not java_files:
                 msg = (
                     f"No Java files in generated code "
@@ -176,12 +182,13 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                     "package_svg": None,
                     "sequence_svg": None,
                     "component_svg": None,
+                    "validation": {},
                 }
 
             # Project-level parse: this sees types across files
             merged_cir = _parse_project_to_cir(java_files)
 
-            # CIR -> PlantUML + SVG (class + package + sequence)
+            # CIR -> PlantUML + SVG (class + package + sequence + component)
             uml_out = _cir_to_plantuml_and_svg(merged_cir)
 
             print("================= UML PIPELINE END (OK) =====================\n")
@@ -193,6 +200,7 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 "package_svg": uml_out.get("package_svg"),
                 "sequence_svg": uml_out.get("sequence_svg"),
                 "component_svg": uml_out.get("component_svg"),
+                "validation": uml_out.get("validation", {}),
             }
 
     except Exception as e:
@@ -207,4 +215,5 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             "package_svg": None,
             "sequence_svg": None,
             "component_svg": None,
+            "validation": {},
         }

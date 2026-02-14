@@ -1,6 +1,13 @@
 import React from "react";
 import { X, Box, Boxes, GitBranch, Eye } from "lucide-react";
 
+type DiagramType = "class" | "package" | "sequence" | "component";
+
+type UmlValidation = {
+  ok: boolean;
+  errors: string[];
+};
+
 type UmlReport = {
   ok?: boolean;
   file_count?: number;
@@ -9,6 +16,9 @@ type UmlReport = {
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
+
+  // NEW: validation info per diagram (optional)
+  validation?: Partial<Record<DiagramType, UmlValidation>>;
 };
 
 export default function UmlViewerModal({
@@ -20,13 +30,25 @@ export default function UmlViewerModal({
 }: {
   open: boolean;
   uml: UmlReport;
-  tab: "class" | "package" | "sequence" | "component";
-  setTab: React.Dispatch<
-    React.SetStateAction<"class" | "package" | "sequence" | "component">
-  >;
+  tab: DiagramType;
+  setTab: React.Dispatch<React.SetStateAction<DiagramType>>;
   onClose: () => void;
 }) {
   if (!open || !uml || uml.error) return null;
+
+  const validation = uml.validation || {};
+  const vinfo = (k: DiagramType) => validation[k];
+
+  const tabEnabled = (k: DiagramType) => {
+    const hasSvg =
+      (k === "class" && !!uml.class_svg) ||
+      (k === "package" && !!uml.package_svg) ||
+      (k === "sequence" && !!uml.sequence_svg) ||
+      (k === "component" && !!uml.component_svg);
+
+    const hasValidation = !!validation[k];
+    return hasSvg || hasValidation;
+  };
 
   return (
     <div
@@ -126,29 +148,29 @@ export default function UmlViewerModal({
             label="Class Diagram"
             icon={<Box size={16} />}
             active={tab === "class"}
-            disabled={!uml.class_svg}
-            onClick={() => uml.class_svg && setTab("class")}
+            disabled={!tabEnabled("class")}
+            onClick={() => setTab("class")}
           />
           <TabButton
             label="Package Diagram"
             icon={<Boxes size={16} />}
             active={tab === "package"}
-            disabled={!uml.package_svg}
-            onClick={() => uml.package_svg && setTab("package")}
+            disabled={!tabEnabled("package")}
+            onClick={() => setTab("package")}
           />
           <TabButton
             label="Sequence Diagram"
             icon={<GitBranch size={16} />}
             active={tab === "sequence"}
-            disabled={!uml.sequence_svg}
-            onClick={() => uml.sequence_svg && setTab("sequence")}
+            disabled={!tabEnabled("sequence")}
+            onClick={() => setTab("sequence")}
           />
           <TabButton
             label="Component Diagram"
             icon={<Box size={16} />}
             active={tab === "component"}
-            disabled={!uml.component_svg}
-            onClick={() => uml.component_svg && setTab("component")}
+            disabled={!tabEnabled("component")}
+            onClick={() => setTab("component")}
           />
         </div>
 
@@ -161,18 +183,33 @@ export default function UmlViewerModal({
             background: "#f8fafc",
           }}
         >
-          {tab === "class" && uml.class_svg && (
-            <DiagramCard title="Class Diagram" svg={uml.class_svg} />
-          )}
-          {tab === "package" && uml.package_svg && (
-            <DiagramCard title="Package Diagram" svg={uml.package_svg} />
-          )}
-          {tab === "sequence" && uml.sequence_svg && (
-            <DiagramCard title="Sequence Diagram" svg={uml.sequence_svg} />
-          )}
-          {tab === "component" && uml.component_svg && (
-            <DiagramCard title="Component Diagram" svg={uml.component_svg} />
-          )}
+          {tab === "class" &&
+            (uml.class_svg ? (
+              <DiagramCard title="Class Diagram" svg={uml.class_svg} />
+            ) : (
+              <ValidationCard title="Class Diagram" info={vinfo("class")} />
+            ))}
+
+          {tab === "package" &&
+            (uml.package_svg ? (
+              <DiagramCard title="Package Diagram" svg={uml.package_svg} />
+            ) : (
+              <ValidationCard title="Package Diagram" info={vinfo("package")} />
+            ))}
+
+          {tab === "sequence" &&
+            (uml.sequence_svg ? (
+              <DiagramCard title="Sequence Diagram" svg={uml.sequence_svg} />
+            ) : (
+              <ValidationCard title="Sequence Diagram" info={vinfo("sequence")} />
+            ))}
+
+          {tab === "component" &&
+            (uml.component_svg ? (
+              <DiagramCard title="Component Diagram" svg={uml.component_svg} />
+            ) : (
+              <ValidationCard title="Component Diagram" info={vinfo("component")} />
+            ))}
         </div>
 
         {/* SVG rendering tweaks + remove underline */}
@@ -286,6 +323,111 @@ function DiagramCard({ title, svg }: { title: string; svg: string }) {
         }}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
+    </div>
+  );
+}
+
+function ValidationCard({
+  title,
+  info,
+}: {
+  title: string;
+  info?: { ok: boolean; errors: string[] };
+}) {
+  if (!info) {
+    return (
+      <div
+        style={{
+          height: "100%",
+          background: "#ffffff",
+          borderRadius: 10,
+          border: "1px solid #e2e8f0",
+          padding: 16,
+          color: "#64748b",
+          fontSize: 13,
+        }}
+      >
+        <div
+          style={{ fontWeight: 700, marginBottom: 8, color: "#0f172a" }}
+        >
+          {title}
+        </div>
+        No SVG available and no validation info was returned.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        height: "100%",
+        background: "#ffffff",
+        borderRadius: 10,
+        border: "1px solid #e2e8f0",
+        padding: 16,
+        overflow: "auto",
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 8, color: "#0f172a" }}>
+        {title}
+      </div>
+
+      <div
+        style={{
+          display: "inline-block",
+          padding: "4px 10px",
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 700,
+          background: info.ok ? "#dcfce7" : "#fee2e2",
+          color: info.ok ? "#166534" : "#991b1b",
+          border: `1px solid ${info.ok ? "#86efac" : "#fca5a5"}`,
+          marginBottom: 12,
+        }}
+      >
+        {info.ok ? "VALID" : "INVALID"}
+      </div>
+
+      {!info.ok && (
+        <div style={{ marginTop: 10 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#991b1b",
+              marginBottom: 8,
+            }}
+          >
+            Validation errors:
+          </div>
+
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: 18,
+              color: "#475569",
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            {(info.errors || []).slice(0, 20).map((err, idx) => (
+              <li key={idx}>{err}</li>
+            ))}
+          </ul>
+
+          {(info.errors || []).length > 20 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "#64748b" }}>
+              Showing first 20 errors...
+            </div>
+          )}
+        </div>
+      )}
+
+      {info.ok && (
+        <div style={{ marginTop: 12, color: "#166534", fontSize: 13 }}>
+          Diagram validated, but SVG is missing (render step may have failed).
+        </div>
+      )}
     </div>
   );
 }
