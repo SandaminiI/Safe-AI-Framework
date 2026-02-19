@@ -225,7 +225,7 @@ function Dashboard() {
 
   const [selectedPlugin, setSelectedPlugin] = useState<string>("");
 const [pluginBaseUrl, setPluginBaseUrl] = useState<string>("");
-const [pluginResult, setPluginResult] = useState<string>("");
+// const [pluginResult, setPluginResult] = useState<string>("");
 
 async function onStartPlugin() {
   if (!selectedPlugin) return alert("Select a plugin slug first");
@@ -851,11 +851,11 @@ async function onStopPlugin() {
     </div>
   )}
 
-  {pluginResult && (
+  {/* {pluginResult && (
     <pre style={{ marginTop: 12, background: "#0f172a", color: "#e2e8f0", padding: 12, borderRadius: 8 }}>
       {pluginResult}
     </pre>
-  )}
+  )} */}
 </Card>
 
 
