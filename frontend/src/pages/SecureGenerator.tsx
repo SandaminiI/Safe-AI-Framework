@@ -1,6 +1,6 @@
 // Securegenerator.tsx
 import { useState } from "react";
-import UmlViewerModal from "../components/UmlViewerModal.tsx";
+import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
 import { FileSearch, CheckCircle2, MinusCircle, Workflow } from "lucide-react";
 
 /* ---------- Types ---------- */
@@ -27,7 +27,7 @@ type SemgrepReport = {
   stats?: Record<string, unknown>;
 };
 
-// UML report type
+/* ---------- Rule-based UML Types ---------- */
 type UmlValidationEntry = {
   ok: boolean;
   errors: string[];
@@ -41,6 +41,10 @@ type UmlReport = {
   ok?: boolean;
   file_count?: number;
   error?: string | null;
+
+  // merged CIR (returned by backend/vibe-secure-gen)
+  cir?: unknown;
+
   class_svg?: string | null;
   package_svg?: string | null;
   sequence_svg?: string | null;
@@ -117,6 +121,10 @@ const sevColor = (sev?: string) => {
   return "#64748b";
 };
 
+/* ---------- API endpoints ---------- */
+const API = "http://localhost:8000/api/generate";
+const UML_AI_API = "http://localhost:7081/uml/ai";
+
 /* ---------- Component ---------- */
 export default function Securegenerator() {
   const [prompt, setPrompt] = useState("");
@@ -124,17 +132,18 @@ export default function Securegenerator() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // UML state
+  // UML modal state
   const [umlOpen, setUmlOpen] = useState(false);
-  const [umlTab, setUmlTab] = useState<"class" | "package" | "sequence" | "component">("class");
-
-  const API = "http://localhost:8000/api/generate";
+  const [umlTab, setUmlTab] = useState<DiagramType>("class");
+  const [aiUmlCache, setAiUmlCache] = useState<AiUmlStore>({});
 
   const onGenerate = async () => {
     setLoading(true);
     setOut(null);
     setCopied(false);
     setUmlOpen(false);
+    setAiUmlCache({});
+
     try {
       const res = await fetch(API, {
         method: "POST",
@@ -336,7 +345,7 @@ export default function Securegenerator() {
             </Section>
 
             {/* UML summary + modal trigger */}
-            <Section title="📊 UML Diagrams (Get a better understanding of the code)">
+            <Section title="📊 UML Diagrams (Rule-based, AI-based)">
               {!uml || uml.error ? (
                 <div
                   style={{
@@ -367,30 +376,82 @@ export default function Securegenerator() {
                       <span>Files analysed for UML: {uml.file_count ?? 0}</span>
                     </div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        Class diagram: {uml.class_svg ? <CheckCircle2 size={16} color="#16a34a"/> : <MinusCircle size={16} color="#16a34a"/>}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        marginTop: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Class diagram:{" "}
+                        {uml.class_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
                         {uml.class_svg ? "available" : "—"}
                       </span>
 
                       <span style={{ opacity: 0.4 }}></span>
 
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        Package diagram: {uml.package_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a" />}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Package diagram:{" "}
+                        {uml.package_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
                         {uml.package_svg ? "available" : "—"}
                       </span>
 
                       <span style={{ opacity: 0.4 }}></span>
 
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        Sequence diagram: {uml.sequence_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Sequence diagram:{" "}
+                        {uml.sequence_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
                         {uml.sequence_svg ? "available" : "—"}
                       </span>
 
                       <span style={{ opacity: 0.4 }}></span>
 
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        Component diagram: {uml.component_svg ? <CheckCircle2 size={16}  color="#16a34a"/> : <MinusCircle size={16}  color="#16a34a"/>}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Component diagram:{" "}
+                        {uml.component_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
                         {uml.component_svg ? "available" : "—"}
                       </span>
                     </div>
@@ -399,8 +460,15 @@ export default function Securegenerator() {
                   <button
                     onClick={() => {
                       if (!uml) return;
-                      const defaultTab: "class" | "package" | "sequence" | "component" =
-                        uml.class_svg ? "class" : uml.package_svg ? "package" : uml.sequence_svg ? "sequence" : "component";
+
+                      const defaultTab: DiagramType = uml.class_svg
+                        ? "class"
+                        : uml.package_svg
+                        ? "package"
+                        : uml.sequence_svg
+                        ? "sequence"
+                        : "component";
+
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
                     }}
@@ -627,6 +695,11 @@ export default function Securegenerator() {
           tab={umlTab}
           setTab={setUmlTab}
           onClose={() => setUmlOpen(false)}
+          code={out?.code ?? null}
+          cir={uml?.cir ?? null}
+          umlAiApi={UML_AI_API}
+          aiStore={aiUmlCache}
+          setAiStore={setAiUmlCache}
         />
       )}
 
