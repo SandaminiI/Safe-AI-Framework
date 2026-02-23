@@ -144,6 +144,26 @@ def _format_mods(obj: Dict[str, Any]) -> str:
         out.append("{abstract}")
     return " ".join(out)
 
+def _is_dunder(name: str) -> bool:
+    """Return True for Python dunder methods like __init__, __str__, __repr__."""
+    return name.startswith("__") and name.endswith("__")
+
+def _safe_sequence_label(method_name: str) -> str:
+    """
+    Convert a method name to a PlantUML-safe sequence arrow label.
+
+    PlantUML uses __ as Creole underline markup, so __init__() would
+    be rendered as underlined "init()" and may break rendering.
+    We map known dunders to display-friendly names.
+    """
+    if method_name == "__init__":
+        return "<<create>>"
+    if _is_dunder(method_name):
+        # Escape by replacing leading/trailing __ with a tilde-escaped form
+        safe = method_name.replace("__", "~__", 1)
+        safe = safe[::-1].replace("__", "~__", 1)[::-1]
+        return f"{safe}()"
+    return f"{method_name}()"
 
 # ======================================================================
 #  CLASS DIAGRAM GENERATION
@@ -230,14 +250,14 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
 
             # constructors should NOT show return type
             if is_ctor:
-                continue   # lines.append(f"  {vis_symbol} {mods_prefix}<<create>> {method_name}({param_str})")
+                continue
             else:
                 return_type = m.get("return_type", "void")
                 raw_ret = m.get("raw_return_type") or return_type
                 display_ret = _clean_type_for_display(raw_ret)
                 lines.append(f"  {vis_symbol} {mods_prefix}{method_name}({param_str}) : {display_ret}")
 
-        lines.append("}")  # end type block
+        lines.append("}")
 
     # ---------- Relationships (class-level) ----------
     relation_lines: Set[str] = set()
@@ -254,7 +274,7 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
             continue
 
         if src not in type_nodes or dst not in type_nodes:
-            continue  # only class-to-class relationships
+            continue
 
         src_name = type_name_by_id[src]
         dst_name = type_name_by_id[dst]
@@ -269,12 +289,10 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
             # print multiplicity if edge carries it
             attrs = e.get("attrs") or {}
             mult = attrs.get("multiplicity")
-
             if mult and mult not in ("1", ""):
                 relation_lines.add(f'{src_name} --> "{mult}" {dst_name}')
             else:
                 relation_lines.add(f"{src_name} --> {dst_name}")
-
         elif etype == "DEPENDS_ON":
             relation_lines.add(f"{src_name} ..> {dst_name}")
 
@@ -285,11 +303,8 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# Backwards-compatible wrapper (old name)
+# Backwards-compatible wrapper
 def generate_plantuml_from_cir(cir: Dict[str, Any]) -> str:
-    """
-    Default: class diagram (for backward compatibility).
-    """
     return generate_class_diagram(cir)
 
 
@@ -381,26 +396,24 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
 
 
 # ======================================================================
-#  SEQUENCE DIAGRAM GENERATION
+#  SEQUENCE DIAGRAM  (patched for Python dunder method safety)
 # ======================================================================
 
 def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
     """
-    Ordered sequence diagram based on CALLS edges (Option 1).
+    Ordered sequence diagram based on CALLS edges.
 
-    Your JavaAdapter now emits:
-      - HAS_METHOD edges: TypeDecl -> Method
-      - CALLS edges: Method -> Method with attrs.order
-
-    This function:
-      1) Maps method -> owning class using HAS_METHOD
-      2) Reads CALLS edges (method-level, ordered)
-      3) Picks an entry method (prefer "main", else any caller)
-      4) Traverses calls in order and prints a sequence diagram
+    Python-specific fixes applied here:
+      - __init__ and other dunder methods are SKIPPED as sequence entry points.
+        We prefer a non-dunder caller (e.g. "run", "main", "start", "process").
+      - CALLS edges whose target is a dunder method are skipped as sequence steps,
+        because __init__() as a message label triggers PlantUML's Creole underline
+        markup (__text__) and causes the SVG renderer to return a 500 error.
+      - If no valid non-dunder CALLS exist, returns a graceful @startuml note
+        rather than generating invalid syntax.
     """
     nodes_by_id, edges = _index_cir(cir)
 
-    # ---------------- Index nodes ----------------
     type_name_by_id: Dict[str, str] = {}
     method_name_by_id: Dict[str, str] = {}
 
@@ -412,17 +425,17 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         elif kind == "Method":
             method_name_by_id[nid] = attrs.get("name", nid)
 
-    # method_id -> type_id (owner class)
+    # method_id → owner type_id
     method_owner: Dict[str, str] = {}
     for e in edges:
         if e.get("type") != "HAS_METHOD":
             continue
-        src = e.get("src")  # type
-        dst = e.get("dst")  # method
+        src = e.get("src")
+        dst = e.get("dst")
         if src in type_name_by_id and dst in method_name_by_id:
             method_owner[dst] = src
 
-    # ---------------- Index CALLS edges ----------------
+    # CALLS edges, indexed by source method
     calls_by_src_method: Dict[str, List[Dict[str, Any]]] = {}
     for e in edges:
         if e.get("type") != "CALLS":
@@ -431,37 +444,67 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         dst_m = e.get("dst")
         if not src_m or not dst_m:
             continue
+
+        # Skip CALLS edges whose target is a dunder method
+        # (avoids __init__() labels that break PlantUML Creole markup)
+        dst_name = method_name_by_id.get(dst_m, "")
+        if _is_dunder(dst_name):
+            continue
+
         order = (e.get("attrs") or {}).get("order", 0)
         calls_by_src_method.setdefault(src_m, []).append(
             {"dst": dst_m, "order": order}
         )
 
-    # ---------------- Pick entry method ----------------
-    # Prefer a method named "main" that has outgoing CALLS
+    # ----------------------------------------------------------------
+    # Pick entry method:
+    # Priority 1: method named "main" with outgoing CALLS
+    # Priority 2: any non-dunder method with outgoing CALLS
+    # ----------------------------------------------------------------
     entry_method_id: str | None = None
+
+    # Try "main" first
     for mid, mname in method_name_by_id.items():
         if mname == "main" and mid in calls_by_src_method:
             entry_method_id = mid
             break
 
-    # Fallback: first method that calls something
+    # Try other well-known entry names
     if entry_method_id is None:
-        entry_method_id = next(iter(calls_by_src_method.keys()), None)
+        for preferred in ("run", "start", "execute", "process", "handle", "dispatch"):
+            for mid, mname in method_name_by_id.items():
+                if mname == preferred and mid in calls_by_src_method:
+                    entry_method_id = mid
+                    break
+            if entry_method_id:
+                break
+
+    # Fallback: first non-dunder method that has outgoing CALLS
+    if entry_method_id is None:
+        for mid in calls_by_src_method:
+            mname = method_name_by_id.get(mid, "")
+            if not _is_dunder(mname):
+                entry_method_id = mid
+                break
 
     lines: List[str] = []
     lines.append("@startuml")
     lines.append("")
 
     if not entry_method_id:
-        lines.append('note "No CALLS edges found to build an ordered sequence diagram." as N1')
+        lines.append(
+            'note "No public method call chains found.\\n'
+            'Sequence diagram requires non-constructor\\n'
+            'methods that call other class methods." as N1'
+        )
         lines.append("@enduml")
         return "\n".join(lines)
 
-    # ---------------- Traverse calls in order ----------------
+    # ----------------------------------------------------------------
+    # Walk CALLS graph from entry, collecting sequence steps
+    # ----------------------------------------------------------------
     participants: Set[str] = set()
-    seq_steps: List[tuple[str, str, str]] = []  # (srcClass, dstClass, label)
-
-    # prevent infinite recursion cycles
+    seq_steps: List[tuple] = []  # (src_class, dst_class, label)
     visiting: Set[str] = set()
 
     def class_of_method(mid: str) -> str | None:
@@ -470,26 +513,29 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             return None
         return type_name_by_id.get(tid, tid)
 
-    def label_for_call(dst_mid: str) -> str:
-        mname = method_name_by_id.get(dst_mid, "call")
-        return f"{mname}()"
-
-    def walk(mid: str):
+    def walk(mid: str) -> None:
         if mid in visiting:
             return
         visiting.add(mid)
 
-        outgoing = calls_by_src_method.get(mid, [])
-        outgoing_sorted = sorted(outgoing, key=lambda x: x.get("order", 0))
+        outgoing = sorted(
+            calls_by_src_method.get(mid, []),
+            key=lambda x: x.get("order", 0),
+        )
 
         src_class = class_of_method(mid)
         if not src_class:
-            visiting.remove(mid)
+            visiting.discard(mid)
             return
 
-        for item in outgoing_sorted:
+        for item in outgoing:
             dst_mid = item.get("dst")
             if not dst_mid:
+                continue
+
+            dst_mname = method_name_by_id.get(dst_mid, "")
+            # Double-check: skip dunder targets (belt-and-suspenders)
+            if _is_dunder(dst_mname):
                 continue
 
             dst_class = class_of_method(dst_mid)
@@ -498,28 +544,27 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
 
             participants.add(src_class)
             participants.add(dst_class)
+            seq_steps.append((src_class, dst_class, _safe_sequence_label(dst_mname)))
 
-            seq_steps.append((src_class, dst_class, label_for_call(dst_mid)))
-
-            # go deeper
             walk(dst_mid)
 
-        visiting.remove(mid)
+        visiting.discard(mid)
 
     walk(entry_method_id)
 
     if not participants or not seq_steps:
-        lines.append('note "CALLS edges exist, but could not map method owners for sequence steps." as N2')
+        lines.append(
+            'note "Method call chains exist but could not be\\n'
+            'mapped to sequence steps. This may happen when\\n'
+            'all calls are to constructors or internal helpers." as N2'
+        )
         lines.append("@enduml")
         return "\n".join(lines)
 
-    # Declare participants
     for p in sorted(participants):
         lines.append(f"participant {p}")
-
     lines.append("")
 
-    # Emit messages in traversal order
     for src_class, dst_class, label in seq_steps:
         lines.append(f"{src_class} -> {dst_class} : {label}")
 
@@ -572,8 +617,7 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
         else:
             lines.append(f'component "{pkg}" as {alias}')
 
-    # 4) Compute inter-package dependencies based on edges between types
-    dep_set: Set[tuple[str, str]] = set()
+    dep_set: Set[tuple] = set()
 
     for e in edges:
         src = e.get("src")
