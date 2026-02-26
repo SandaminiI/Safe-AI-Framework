@@ -5,7 +5,8 @@ from typing import Optional
 from plantuml_runner import PlantUMLRenderer
 
 # TODO: change this path to where your plantuml.jar is actually stored
-PLANTUML_JAR_PATH = r"D:\SLIIT\Year 4\RP\PROJECT\tools\plantuml.jar"
+# PLANTUML_JAR_PATH = r"D:\SLIIT\Year 4\RP\PROJECT\tools\plantuml.jar"
+PLANTUML_JAR_PATH = r"C:\Users\ASUS\Desktop\Safe-AI-Framework\tools\plantuml.jar"
 
 renderer = PlantUMLRenderer(PLANTUML_JAR_PATH)
 app = FastAPI(title="UML Render Service (PlantUML -> SVG)")
