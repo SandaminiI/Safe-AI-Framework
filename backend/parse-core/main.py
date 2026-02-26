@@ -1,42 +1,203 @@
-from fastapi import FastAPI # type: ignore
+"""
+FastAPI service that exposes:
+  GET  /health
+  POST /detect          - language detection
+  POST /parse           - single-file  CIR (java OR python)
+  POST /parse/project   - multi-file   CIR (java OR python)
+"""
+from __future__ import annotations
+
+import os
+import tempfile
+from typing import List, Literal, Optional, Dict, Any
+
+from fastapi import FastAPI, HTTPException # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pydantic import BaseModel # type: ignore
-from detect import detect_language
+
 from adapters.java_adapter import JavaAdapter
+from adapters.python_adapter import PythonAdapter
+from detect import detect_language
 
-app = FastAPI()
-java_adapter = JavaAdapter()
+# ---------------------------------------------------------
+# App + CORS
+# ---------------------------------------------------------
 
-class Req(BaseModel):
+app = FastAPI(title="Parser Core Service", version="0.2.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Pre-instantiate adapters (they are stateless/reusable)
+_java_adapter = JavaAdapter()
+_python_adapter = PythonAdapter()
+
+_SUPPORTED_LANGUAGES = {"java", "python"}
+
+
+def _get_adapter(lang: str):
+    """Return the right adapter for a given language string."""
+    if lang == "java":
+        return _java_adapter
+    if lang == "python":
+        return _python_adapter
+    return None
+
+
+# ---------------------------------------------------------
+# Health
+# ---------------------------------------------------------
+
+@app.get("/health")
+def health() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------
+# Language detection
+# ---------------------------------------------------------
+
+class DetectRequest(BaseModel):
     code: str
-    filename: str | None = None
 
-@app.post("/detect")
-def detect(req: Req):
-    lang, conf, source = detect_language(req.code, req.filename)
-    return {
-        "language": lang,
-        "confidence": conf,
-        "source": source
-    }
+
+class DetectResponse(BaseModel):
+    language: Literal["java", "python", "javascript", "typescript", "unknown"]
+    confidence: float
+    reason: str
+
+
+@app.post("/detect", response_model=DetectResponse)
+def detect(req: DetectRequest) -> DetectResponse:
+    lang, conf, reason = detect_language(req.code or "")
+    if lang not in ("java", "python", "javascript", "typescript"):
+        lang, conf, reason = "unknown", 0.0, "none"
+    return DetectResponse(language=lang, confidence=conf, reason=reason)
+
+
+# ---------------------------------------------------------
+# Single-file parse → CIR
+# ---------------------------------------------------------
 
 class ParseRequest(BaseModel):
     code: str
-    filename: str | None = None
+    filename: str
+    language: Optional[Literal["java", "python", "javascript", "typescript"]] = None
 
-@app.post("/parse")
-def parse(req: ParseRequest):
-     # detect language
-     lang, conf, source = detect_language(req.code, req.filename)
 
-     if lang == "java":
-         graph = java_adapter.build_cir_graph_for_code(req.code, req.filename)
-         cir_json = graph.to_debug_json()
-         return {
-             "language": lang,
-             "confidence": conf,
-             "source": source,
-             "cir": cir_json
-         }
+class ParseResponse(BaseModel):
+    language: str
+    file_count: int
+    cir: Dict[str, Any]
 
-     # future: handle python / typescript
-     return {"error": f"Parsing not yet implemented for language: {lang}"}
+
+@app.post("/parse", response_model=ParseResponse)
+def parse(req: ParseRequest) -> ParseResponse:
+    """
+    Parse a single code snippet into CIR.
+    Supports: java, python
+    """
+    if req.language:
+        lang = req.language
+    else:
+        lang, _conf, _reason = detect_language(req.code, filename=req.filename)
+
+    if lang not in _SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Language '{lang}' is not supported by /parse. "
+                f"Supported languages: {sorted(_SUPPORTED_LANGUAGES)}."
+            ),
+        )
+
+    adapter = _get_adapter(lang)
+    graph = adapter.build_cir_graph_for_code(req.code, filename=req.filename)
+    cir = graph.to_debug_json()
+
+    return ParseResponse(
+        language=lang, 
+        file_count=1,
+        cir=cir,
+    )
+
+
+# ---------------------------------------------------------
+# Project-level parse → merged CIR
+# ---------------------------------------------------------
+
+class ProjectFile(BaseModel):
+    filename: str
+    code: str
+
+
+class ProjectParseRequest(BaseModel):
+    language: Literal["java", "python"] = "java"
+    files: List[ProjectFile]
+
+
+class ProjectParseResponse(BaseModel):
+    language: str
+    file_count: int
+    cir: Dict[str, Any]
+    parse_errors: List[Dict[str, str]] = []
+
+
+@app.post("/parse/project", response_model=ProjectParseResponse)
+def parse_project(req: ProjectParseRequest) -> ProjectParseResponse:
+    """
+    Accept multiple source files and build ONE merged CIR graph.
+
+    For java:   uses JavaAdapter.build_cir_graph_for_files(...)
+    For python: uses PythonAdapter.build_cir_graph_for_files(...)
+
+    Cross-file relationships (e.g. ShoppingCart --> Product) are resolved
+    because all files are parsed together into a shared type namespace.
+    """
+    if req.language not in _SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Language '{req.language}' is not supported for /parse/project. "
+                f"Supported: {sorted(_SUPPORTED_LANGUAGES)}."
+            ),
+        )
+
+    adapter = _get_adapter(req.language)
+
+    # Determine the file extension for the temp files
+    ext = ".java" if req.language == "java" else ".py"
+
+    with tempfile.TemporaryDirectory() as td:
+        paths: List[str] = []
+
+        for f in req.files:
+            # Ensure filename has the right extension
+            fname = f.filename
+            if not fname.endswith(ext):
+                fname = fname + ext
+
+            path = os.path.join(td, fname)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(f.code)
+            paths.append(path)
+
+        graph = adapter.build_cir_graph_for_files(paths)
+        cir = graph.to_debug_json()
+        cir["parse_errors"] = graph.g.graph.get("parse_errors", [])
+
+    return ProjectParseResponse(
+        language=req.language,
+        file_count=len(req.files),
+        cir=cir,
+        parse_errors=cir.get("parse_errors", []),
+    )

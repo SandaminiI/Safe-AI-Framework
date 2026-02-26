@@ -227,7 +227,7 @@ function Dashboard() {
 
   const [selectedPlugin, setSelectedPlugin] = useState<string>("");
 const [pluginBaseUrl, setPluginBaseUrl] = useState<string>("");
-const [pluginResult, setPluginResult] = useState<string>("");
+// const [pluginResult, setPluginResult] = useState<string>("");
 
 async function onStartPlugin() {
   if (!selectedPlugin) return alert("Select a plugin slug first");
