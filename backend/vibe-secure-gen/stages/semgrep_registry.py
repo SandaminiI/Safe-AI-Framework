@@ -105,14 +105,21 @@ def _ensure_semgrep() -> Tuple[bool, str]:
         # Now try a version check with short timeout
         try:
             creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+            # FIX: Force UTF-8 encoding to prevent UnicodeDecodeError on Windows
+            _env = os.environ.copy()
+            _env["PYTHONUTF8"] = "1"
+            _env["PYTHONIOENCODING"] = "utf-8"
             
             result = subprocess.run(
                 [_SEMGREP_PATH, "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",   # FIX: explicit UTF-8
+                errors="replace",   # FIX: don't crash on bad bytes
                 timeout=5,
                 creationflags=creationflags,
-                env=os.environ.copy()
+                env=_env            # FIX: use env with UTF-8 vars
             )
             
             if result.returncode == 0:
@@ -160,16 +167,21 @@ def _run_semgrep_on_dir(src_dir: str, packs: List[str]) -> Dict[str, Any]:
 
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+        # FIX: Force UTF-8 encoding to prevent UnicodeDecodeError on Windows (cp1252 crash)
+        _env = os.environ.copy()
+        _env["PYTHONUTF8"] = "1"
+        _env["PYTHONIOENCODING"] = "utf-8"
         
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            encoding="utf-8",
-            errors="replace",
+            encoding="utf-8",   # already present - keeping
+            errors="replace",   # already present - keeping
             timeout=150,
             creationflags=creationflags,
-            env=os.environ.copy()
+            env=_env            # FIX: was os.environ.copy() without UTF-8 vars
         )
         
     except subprocess.TimeoutExpired:
