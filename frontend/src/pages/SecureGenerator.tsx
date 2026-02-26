@@ -1,4 +1,7 @@
+// Securegenerator.tsx
 import { useState } from "react";
+import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
+import { FileSearch, CheckCircle2, MinusCircle, Workflow } from "lucide-react";
 
 /* ---------- Types ---------- */
 type SemgrepFinding = {
@@ -24,6 +27,31 @@ type SemgrepReport = {
   stats?: Record<string, unknown>;
 };
 
+/* ---------- Rule-based UML Types ---------- */
+type UmlValidationEntry = {
+  ok: boolean;
+  errors: string[];
+};
+
+type UmlValidationMap = Partial<
+  Record<"class" | "package" | "sequence" | "component", UmlValidationEntry>
+>;
+
+type UmlReport = {
+  ok?: boolean;
+  file_count?: number;
+  error?: string | null;
+
+  // merged CIR (returned by backend/vibe-secure-gen)
+  cir?: unknown;
+
+  class_svg?: string | null;
+  package_svg?: string | null;
+  sequence_svg?: string | null;
+  component_svg?: string | null;
+  validation?: UmlValidationMap;
+};
+
 type Report = {
   policy_version?: string;
   prompt_after_enhancement?: string;
@@ -32,6 +60,7 @@ type Report = {
     injection_patterns_detected?: string[];
     injection_blocked?: boolean;
   };
+  uml?: UmlReport;
 };
 
 type ApiResult = {
@@ -92,18 +121,29 @@ const sevColor = (sev?: string) => {
   return "#64748b";
 };
 
-/* ---------- App ---------- */
-export default function App() {
+/* ---------- API endpoints ---------- */
+const API = "http://localhost:8000/api/generate";
+const UML_AI_API = "http://localhost:7081/uml/ai";
+
+/* ---------- Component ---------- */
+export default function Securegenerator() {
   const [prompt, setPrompt] = useState("");
   const [out, setOut] = useState<ApiResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const API = "http://localhost:8000/api/generate";
+
+  // UML modal state
+  const [umlOpen, setUmlOpen] = useState(false);
+  const [umlTab, setUmlTab] = useState<DiagramType>("class");
+  const [aiUmlCache, setAiUmlCache] = useState<AiUmlStore>({});
 
   const onGenerate = async () => {
     setLoading(true);
     setOut(null);
     setCopied(false);
+    setUmlOpen(false);
+    setAiUmlCache({});
+
     try {
       const res = await fetch(API, {
         method: "POST",
@@ -127,6 +167,8 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const uml = out?.report?.uml;
+
   return (
     <div
       style={{
@@ -142,7 +184,8 @@ export default function App() {
           width: "100%",
           maxWidth: "100%",
           margin: "0 auto",
-          fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif",
+          fontFamily:
+            "system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif",
         }}
       >
         {/* Header */}
@@ -191,6 +234,7 @@ export default function App() {
           >
             Describe the code you want to generate (any language)
           </label>
+
           <textarea
             rows={5}
             style={{
@@ -300,6 +344,156 @@ export default function App() {
               </pre>
             </Section>
 
+            {/* UML summary + modal trigger */}
+            <Section title="📊 UML Diagrams (Rule-based, AI-based)">
+              {!uml || uml.error ? (
+                <div
+                  style={{
+                    padding: 12,
+                    background: "#fef2f2",
+                    borderRadius: 6,
+                    color: "#991b1b",
+                    fontSize: 13,
+                  }}
+                >
+                  {uml?.error
+                    ? `UML generation: ${uml.error}`
+                    : "No UML diagrams available for this generation (e.g. non-Java code)."}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ fontSize: 13, color: "#64748b" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <FileSearch size={16} />
+                      <span>Files analysed for UML: {uml.file_count ?? 0}</span>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        marginTop: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Class diagram:{" "}
+                        {uml.class_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
+                        {uml.class_svg ? "available" : "—"}
+                      </span>
+
+                      <span style={{ opacity: 0.4 }}></span>
+
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Package diagram:{" "}
+                        {uml.package_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
+                        {uml.package_svg ? "available" : "—"}
+                      </span>
+
+                      <span style={{ opacity: 0.4 }}></span>
+
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Sequence diagram:{" "}
+                        {uml.sequence_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
+                        {uml.sequence_svg ? "available" : "—"}
+                      </span>
+
+                      <span style={{ opacity: 0.4 }}></span>
+
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        Component diagram:{" "}
+                        {uml.component_svg ? (
+                          <CheckCircle2 size={16} color="#16a34a" />
+                        ) : (
+                          <MinusCircle size={16} color="#16a34a" />
+                        )}
+                        {uml.component_svg ? "available" : "—"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (!uml) return;
+
+                      const defaultTab: DiagramType = uml.class_svg
+                        ? "class"
+                        : uml.package_svg
+                        ? "package"
+                        : uml.sequence_svg
+                        ? "sequence"
+                        : "component";
+
+                      setUmlTab(defaultTab);
+                      setUmlOpen(true);
+                    }}
+                    style={{
+                      padding: "10px 18px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#0ea5e9",
+                      color: "white",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <Workflow size={16} />
+                    Open UML Viewer
+                  </button>
+                </div>
+              )}
+            </Section>
+
             {/* SAST Report */}
             <Section title="🔍 SAST Analysis (Semgrep)">
               {out.report?.semgrep?.error && (
@@ -341,7 +535,9 @@ export default function App() {
                     <div style={{ fontSize: 13, color: "#475569" }}>
                       <strong>Files:</strong> {out.report.semgrep.file_count ?? 0}
                     </div>
+
                     <Badge ok={Boolean(out.report.semgrep.findings?.length === 0)} />
+
                     <div style={{ fontSize: 13, color: "#64748b" }}>
                       {(out.report.semgrep.findings?.length ?? 0)} finding
                       {(out.report.semgrep.findings?.length ?? 0) === 1 ? "" : "s"}
@@ -490,6 +686,22 @@ export default function App() {
           Protected by OWASP LLM01 • Multi-Language Support • Powered by Gemini AI
         </div>
       </main>
+
+      {/* UML Modal */}
+      {uml && !uml.error && (
+        <UmlViewerModal
+          open={umlOpen}
+          uml={uml}
+          tab={umlTab}
+          setTab={setUmlTab}
+          onClose={() => setUmlOpen(false)}
+          code={out?.code ?? null}
+          cir={uml?.cir ?? null}
+          umlAiApi={UML_AI_API}
+          aiStore={aiUmlCache}
+          setAiStore={setAiUmlCache}
+        />
+      )}
 
       <style>{`
         html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; }

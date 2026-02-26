@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self';
+             script-src 'self';
+             style-src 'self' 'unsafe-inline';
+             img-src 'self' data:;
+             connect-src http://localhost:8000;
+             object-src 'none';
+             base-uri 'none';
+             form-action 'none';
+             frame-ancestors 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plugin Host</title>
+  <style>html,body{height:100%;margin:0}#root{height:100%}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+  const qs = new URLSearchParams(location.search);
+  const base = qs.get("base");       // e.g. /plugins/about-us
+  const entry = qs.get("entry") || "entry.js";
+
+  // allowlist of core APIs the plugin may call through the bridge
+  const ALLOW = new Set([
+    "/core/status",
+    // add more paths when needed
+  ]);
+
+  async function callCore(method, path, body) {
+    if (!ALLOW.has(path)) throw new Error("Blocked by sandbox allowlist: " + path);
+    const res = await fetch("http://localhost:8000" + path, {
+      method,
+      headers: body ? {"Content-Type":"application/json"} : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: "omit",
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json().catch(()=> ({}));
+  }
+
+  // bridge for plugin (plugin calls parent.postMessage, we reply)
+  addEventListener("message", async (ev) => {
+    const msg = ev.data;
+    if (msg?.type !== "core.call") return;
+    try {
+      const data = await callCore(msg.method || "GET", msg.path, msg.body);
+      parent.postMessage({ type:"core.result", id: msg.id, ok:true, data }, "*");
+    } catch (error) {
+      parent.postMessage({ type:"core.result", id: msg.id, ok:false, error: String(error) }, "*");
+    }
+  });
+
+  // load plugin module
+  const mountEl = document.getElementById("root");
+  const mod = await import(base + "/" + entry);
+  if (!mod.mount) throw new Error("entry.js must export function mount(el, ctx)");
+  mod.mount(mountEl, { hostVersion: 1, base });
+</script>
+</body>
+</html>
