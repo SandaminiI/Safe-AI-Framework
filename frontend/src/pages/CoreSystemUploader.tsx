@@ -241,6 +241,11 @@ async function onStartPlugin() {
 //   const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
 //   setPluginResult(JSON.stringify(res.result, null, 2));
 // }
+// async function onRunPlugin() {
+//   if (!selectedPlugin) return alert("Select a plugin slug first");
+//   const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
+//   setPluginResult(JSON.stringify(res.result, null, 2));
+// }
 
 async function onStopPlugin() {
   if (!selectedPlugin) return alert("Select a plugin slug first");
