@@ -8,6 +8,8 @@ import Editor from "@monaco-editor/react";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
 import PluginStudioPage from "./PluginStudioPage";
 import { startPlugin, runPlugin, stopPlugin } from "../api/pluginClient";
+import { Loader2, Play, Square } from "lucide-react";
+import { FaPlay, FaStop } from "react-icons/fa";
 
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:8012";
@@ -200,7 +202,7 @@ function Dashboard() {
   const [folderFiles, setFolderFiles] = useState<FileList | null>(null);
 
   // Explorer + Editor
-  const [cwd, setCwd] = useState<string>("");
+  const [cwd, setCwd] = useState("");
   const [items, setItems] = useState<TreeItem[]>([]);
   const [openPath, setOpenPath] = useState<string>("");
   const [editorValue, setEditorValue] = useState<string>("");
@@ -234,6 +236,11 @@ async function onStartPlugin() {
   alert(`Started: ${res.base_url}`);
 }
 
+// async function onRunPlugin() {
+//   if (!selectedPlugin) return alert("Select a plugin slug first");
+//   const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
+//   setPluginResult(JSON.stringify(res.result, null, 2));
+// }
 // async function onRunPlugin() {
 //   if (!selectedPlugin) return alert("Select a plugin slug first");
 //   const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
@@ -479,506 +486,371 @@ async function onStopPlugin() {
   }
 
   return (
+  <div
+    style={{
+      height: "100vh",
+      width: "100vw",
+      background: "#0f0b1a",
+      color: "#e2e8f0",
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: "Inter, sans-serif",
+    }}
+  >
+    {/* ================= TOP NAVBAR ================= */}
     <div
       style={{
-        width: "100vw",
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        padding: "40px 20px",
-        overflowX: "hidden",
+        height: 60,
+        background: "#1a1328",
+        display: "flex",
+        alignItems: "center",
+        padding: "0 20px",
+        justifyContent: "space-between",
       }}
     >
-      <main
+      <div style={{ fontWeight: 700, fontSize: 18 }}>
+        Core System Uploader & Runner
+      </div>
+
+      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+
+        {/* frontend port number get part */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+
+          <span style={{ fontSize: 12, opacity: 0.7 }}>
+            Frontend Port:
+          </span>
+
+          <input
+            type="number"
+            value={dockerFrontPort}
+            onChange={(e) => setDockerFrontPort(e.target.value)}
+            style={{
+              width: 80,
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid #4c1d95",
+              background: "#140d22",
+              color: "white",
+              outline: "none",
+              fontSize: 13,
+            }}
+          />
+
+        </div>
+        {/* Start Core */}
+        <button
+          onClick={dockerStartSingleButton}
+          style={{
+            minWidth: 38,
+            minHeight: 38,
+            padding: 8,
+            borderRadius: 8,
+            border: "none",
+            background: "#50B848",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+          }}
+        >
+          <FaPlay size={16} color="white" />
+        </button>
+
+        <button
+          onClick={dockerStopAll}
+          title="Stop Core"
+          style={{
+            minWidth: 38,
+            minHeight: 38,
+            padding: 8,
+            borderRadius: 8,
+            border: "none",
+            background: "#D30027",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+          }}
+        >
+          <FaStop size={16} color="white" />
+
+          {/* <Square size={18} color="white" /> */}
+        </button>
+
+        {/* <button
+          onClick={dockerStopAll}
+          style={navBtnDanger}
+        >
+          Stop All Containers
+        </button> */}
+
+        <button
+          onClick={() => navigate("/secure-generator")}
+          style={navBtn}
+        >
+          Open Code Generator
+        </button>
+
+      </div>
+    </div>
+
+    {/* ================= MAIN BODY ================= */}
+    <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+
+      {/* ===== LEFT EXPLORER ===== */}
+      <div
         style={{
-          width: "100%",
-          maxWidth: 1200,
-          margin: "0 auto",
-          fontFamily:
-            'system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif',
+          width: 250,
+          background: "#1a1328",
+          borderRight: "1px solid #2d1f45",
+          padding: 16,
+          overflowY: "auto",
         }}
       >
-        {/* Header */}
-        <Card style={{ marginBottom: 24, padding: 32 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <h1
-                style={{
-                  margin: "0 0 8px 0",
-                  fontSize: 28,
-                  fontWeight: 800,
-                  color: "#1e293b",
-                }}
-              >
-                Core System Uploader & Runner
-              </h1>
-              {/* <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>
-                Upload your MERN project, run frontend & backend in Docker, and preview instantly.
-              </p> */}
-              {/* <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <Badge text={status?.project_present ? "Project Loaded" : "No Project"} ok={!!status?.project_present} />
-                <Badge text={status?.running ? "Processes Active" : "Idle"} ok={!!status?.running} />
-              </div> */}
-            </div>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                onClick={() => setShowPluginModal(true)}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "#3b82f6",
-                  color: "white",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                + Add Plugin
-              </button>
-              <button
-                onClick={() => navigate("/secure-generator")}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  border: "1px solid #e2e8f0",
-                  background: "#ffffff",
-                  color: "#0f172a",
-                  fontWeight: 800,
-                  cursor: "pointer",
-                }}
-              >
-                Open Plugin Studio
-              </button>
-            </div>
-          </div>
-        </Card>
-
-        {/* Upload */}
-        <Section title="1) Upload project folder">
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              onChange={(e) => setFolderFiles(e.currentTarget.files)}
-              disabled={busy}
-              style={{
-                padding: 10,
-                border: "2px solid #e2e8f0",
-                borderRadius: 8,
-                background: "#fff",
-              }}
-            />
-            <span style={{ opacity: 0.8 }}>
-              {folderFiles ? `${folderFiles.length} files selected` : "no folder selected"}
-            </span>
-            <button
-              onClick={uploadFolder}
-              disabled={!folderFiles || folderFiles.length === 0 || busy}
-              style={{
-                padding: "12px 18px",
-                borderRadius: 8,
-                border: "none",
-                background: !folderFiles || folderFiles.length === 0 || busy ? "#cbd5e1" : "#3b82f6",
-                color: "white",
-                fontWeight: 700,
-                cursor: !folderFiles || folderFiles.length === 0 || busy ? "not-allowed" : "pointer",
-              }}
-            >
-              Upload Folder
-            </button>
-            <button
-              onClick={dockerStopAll}
-              disabled={busy}
-              style={{
-                padding: "12px 18px",
-                borderRadius: 8,
-                border: "2px solid #ef4444",
-                background: "white",
-                color: "#ef4444",
-                fontWeight: 700,
-                cursor: busy ? "not-allowed" : "pointer",
-              }}
-            >
-              Stop ALL Containers
-            </button>
-          </div>
-        </Section>
-
-        {/* Run */}
-        <Section title="2) Run (Docker)">
-          <div style={{ marginBottom: 10, color: "#475569" }}>
-            Detected subdirs are prefilled. Edit if needed, then press <b>Start</b>.
-          </div>
-
+        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 10 }}>
+          EXPLORER
+        </div>
+        {cwd !== "" && (
           <div
+            onClick={() => {
+              const parent = cwd.split("/").slice(0, -1).join("/");
+              loadTree(parent);
+            }}
             style={{
-              display: "grid",
-              gridTemplateColumns: "max-content 320px max-content 120px",
-              gap: 10,
-              alignItems: "center",
+              marginBottom: 12,
+              padding: "6px 8px",
+              borderRadius: 6,
+              background: "#1f1535",
+              
+              cursor: "pointer",
+              fontSize: 12,
             }}
           >
-            <label>Frontend subdir:</label>
-            <input
-              type="text"
-              placeholder="e.g. Project/frontend"
-              value={dockerFrontSubdir}
-              onChange={(e) => setDockerFrontSubdir(e.target.value)}
-              style={{ padding: 10, border: "2px solid #e2e8f0", borderRadius: 8, outline: "none" }}
-            />
-            <label>Port:</label>
-            <input
-              type="text"
-              placeholder="3000"
-              value={dockerFrontPort}
-              onChange={(e) => setDockerFrontPort(e.target.value)}
-              style={{ padding: 10, border: "2px solid #e2e8f0", borderRadius: 8, outline: "none" }}
-            />
+            ⬅ Back
           </div>
+        )}
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "max-content 320px max-content 120px",
-              gap: 10,
-              alignItems: "center",
-              marginTop: 10,
-            }}
-          >
-            <label>Backend subdir:</label>
-            <input
-              type="text"
-              placeholder="e.g. Project/backend"
-              value={dockerBackSubdir}
-              onChange={(e) => setDockerBackSubdir(e.target.value)}
-              style={{ padding: 10, border: "2px solid #e2e8f0", borderRadius: 8, outline: "none" }}
-            />
-            <label>Port:</label>
-            <input
-              type="text"
-              placeholder="8088"
-              value={dockerBackPort}
-              onChange={(e) => setDockerBackPort(e.target.value)}
-              style={{ padding: 10, border: "2px solid #e2e8f0", borderRadius: 8, outline: "none" }}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
-            <button
-              onClick={dockerStartSingleButton}
-              disabled={busy || !status?.project_present}
-              style={{
-                padding: "12px 18px",
-                borderRadius: 8,
-                border: "none",
-                background: busy || !status?.project_present ? "#cbd5e1" : "#10b981",
-                color: "white",
-                fontWeight: 800,
-                cursor: busy || !status?.project_present ? "not-allowed" : "pointer",
-              }}
-            >
-              Start
-            </button>
-            <button
-              onClick={dockerList}
-              disabled={busy}
-              style={{
-                padding: "12px 18px",
-                borderRadius: 8,
-                border: "2px solid #3b82f6",
-                background: "white",
-                color: "#3b82f6",
-                fontWeight: 800,
-                cursor: busy ? "not-allowed" : "pointer",
-              }}
-            >
-              Refresh Containers
-            </button>
-          </div>
-
-          {/* Live URLs */}
-          <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px dashed #e2e8f0" }}>
-            <div style={{ fontWeight: 700, marginBottom: 6, color: "#1e293b" }}>Live URLs</div>
-            {!frontUrl && !backUrl ? (
-              <div style={{ opacity: 0.7 }}>No published ports detected yet. Start the apps, then “Refresh Containers”.</div>
+        {items.map((it) => (
+          <div key={it.path} style={{ marginBottom: 6 }}>
+            {it.type === "dir" ? (
+              <div
+                style={{ cursor: "pointer", color: "#ffffff" }}
+                onClick={() => loadTree(it.path)}
+              >
+                📁 {it.name}
+              </div>
             ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
-                {frontUrl && (
-                  <li>
-                    <b>Frontend:</b>{" "}
-                    <a href={frontUrl} target="_blank" rel="noreferrer">
-                      {frontUrl}
-                    </a>{" "}
-                    <button
-                      onClick={() => setShowPreview((s) => !s)}
-                      style={{
-                        marginLeft: 8,
-                        padding: "6px 10px",
-                        borderRadius: 8,
-                        border: "1px solid #e2e8f0",
-                        background: "#f8fafc",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {showPreview ? "Hide preview" : "Show preview"}
-                    </button>
-                  </li>
-                )}
-                {backUrl && (
-                  <li>
-                    <b>Backend:</b>{" "}
-                    <a href={backUrl} target="_blank" rel="noreferrer">
-                      {backUrl}
-                    </a>
-                  </li>
-                )}
-              </ul>
+              <div
+                style={{ cursor: "pointer" }}
+                onClick={() => openFile(it.path)}
+              >
+                📄 {it.name}
+              </div>
             )}
           </div>
+        ))}
+      </div>
 
-          {/* Optional inline preview (Frontend) */}
-          {showPreview && frontUrl && (
-            <div
-              style={{
-                marginTop: 10,
-                height: 420,
-                border: "1px solid #e2e8f0",
-                borderRadius: 12,
-                overflow: "hidden",
-                background: "#fff",
-              }}
-            >
-              <div style={{ padding: 8, borderBottom: "1px solid #e2e8f0", display: "flex", alignItems: "center", gap: 10 }}>
-                <strong>Preview</strong> <span style={{ opacity: 0.7 }}>{frontUrl}</span>
-              </div>
-              <iframe src={frontUrl} title="app" style={{ width: "100%", height: "100%", border: "none" }} />
+      {/* ===== CENTER EDITOR ===== */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <div
+          style={{
+            background: "#181022",
+            padding: "8px 14px",
+            borderBottom: "1px solid #2d1f45",
+            display: "flex",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>{openPath || "No file open"}</div>
+          <button onClick={saveFile} style={navBtnOutline}>
+            Save Changes
+          </button>
+        </div>
+
+        <Editor
+          height="100%"
+          theme="vs-dark"
+          language={guessLang(openPath)}
+          value={editorValue}
+          onChange={(v) => {
+            setEditorValue(v ?? "");
+            setDirty(true);
+          }}
+        />
+      </div>
+
+      {/* ===== RIGHT PANEL ===== */}
+      <div
+        style={{
+          width: 300,
+          background: "#1a1328",
+          borderLeft: "1px solid #2d1f45",
+          padding: 16,
+          overflowY: "auto",
+        }}
+      >
+        {/* Upload */}
+        <div style={cardStyle}>
+          <div style={{ marginBottom: 12, fontWeight: 600 }}>
+            Upload Core System
+          </div>
+
+          {/* Drag & Select Folder Box */}
+          <div
+            onClick={() => folderInputRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                setFolderFiles(e.dataTransfer.files);
+              }
+            }}
+            style={{
+              border: "2px dashed #7c3aed",
+              borderRadius: 14,
+              padding: 30,
+              textAlign: "center",
+              cursor: "pointer",
+              background: "#0f0b1a",
+              transition: "all 0.2s ease",
+            }}
+          >
+            <div style={{ fontSize: 36, marginBottom: 10 }}>📂</div>
+
+            <div style={{ fontWeight: 600 }}>
+              Click to select project folder
+            </div>
+
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
+              Entire project directory supported
+            </div>
+          </div>
+
+          {/* Hidden Folder Input */}
+          <input
+            type="file"
+            multiple
+            ref={folderInputRef}
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                setFolderFiles(e.target.files);
+              }
+            }}
+            style={{ display: "none" }}
+            {...({ webkitdirectory: "true" } as any)}
+
+          />
+
+          {/* File Count */}
+          {folderFiles && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#a78bfa" }}>
+              📦 {folderFiles.length} files selected
             </div>
           )}
 
-          {/* Containers list */}
-          <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px dashed #e2e8f0" }}>
-            <div style={{ fontWeight: 700, marginBottom: 6, color: "#1e293b" }}>Active containers</div>
-            {Object.keys(containers).length === 0 ? (
-              <div style={{ opacity: 0.7 }}>None</div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ background: "#f8fafc" }}>
-                      <th style={{ textAlign: "left", padding: 10, borderBottom: "2px solid #e2e8f0" }}>Subdir</th>
-                      <th style={{ textAlign: "left", padding: 10, borderBottom: "2px solid #e2e8f0" }}>Container</th>
-                      <th style={{ textAlign: "left", padding: 10, borderBottom: "2px solid #e2e8f0" }}>Ports</th>
-                      <th style={{ textAlign: "right", padding: 10, borderBottom: "2px solid #e2e8f0" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(containers).map(([subdir, rec]) => (
-                      <tr key={subdir} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                        <td style={{ padding: 10 }}>
-                          <code style={{ background: "#f1f5f9", padding: "2px 6px", borderRadius: 6, fontSize: 12 }}>
-                            {subdir}
-                          </code>
-                        </td>
-                        <td style={{ padding: 10, color: "#334155" }}>{rec.name || rec.id}</td>
-                        <td style={{ padding: 10, color: "#475569" }}>
-                          {Array.isArray(rec.ports) && rec.ports.length > 0 ? rec.ports.join(", ") : "—"}
-                        </td>
-                        <td style={{ padding: 10, textAlign: "right" }}>
-                          <button
-                            onClick={() => dockerStop(subdir)}
-                            disabled={busy}
-                            style={{
-                              padding: "8px 12px",
-                              borderRadius: 8,
-                              border: "2px solid #ef4444",
-                              background: "white",
-                              color: "#ef4444",
-                              fontWeight: 700,
-                              cursor: busy ? "not-allowed" : "pointer",
-                            }}
-                          >
-                            Stop
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          {/* Upload Button */}
+          <button
+            onClick={uploadFolder}
+            disabled={!folderFiles || busy}
+            style={{
+              marginTop: 14,
+              width: "100%",
+              padding: "10px",
+              borderRadius: 8,
+              border: "none",
+              background: "#4F0C87",
+              color: "white",
+              fontWeight: 600,
+              cursor: !folderFiles || busy ? "not-allowed" : "pointer",
+              opacity: !folderFiles || busy ? 0.5 : 1,
+            }}
+          >
+            Upload Core System
+          </button>
+        </div>
+        {/* add new plugin part */}
+        <div style={cardStyle}>
+          <button
+            onClick={() => setShowPluginModal(true)}
+            disabled={!folderFiles || busy}
+            style={{
+              marginTop: 14,
+              width: "100%",
+              padding: "10px",
+              borderRadius: 8,
+              border: "none",
+              background: "#4F0C87",
+              color: "white",
+              fontWeight: 600,
+            }}
+          >
+            + Add AI Plugin
+          </button>
+
+        </div>
+
+        {/* Plugin Runner */}
+        <div style={cardStyle}>
+          <div style={{ marginBottom: 10, fontWeight: 600 }}>
+            Plugin Runner
           </div>
-        </Section>
 
-        {/* Modal with embedded Plugin Studio (compact) */}
-        <Modal
-          open={showPluginModal}
-          title="Add Plugin"
-          onClose={() => setShowPluginModal(false)}
-          width={820}
-        >
-          <PluginStudioPage apiBase={API} compact />
-        </Modal>
+          <input
+            value={selectedPlugin}
+            onChange={(e) => setSelectedPlugin(e.target.value)}
+            placeholder="e.g. auth-service"
+            style={inputDark}
+          />
 
-        {/*plugin runner part*/}
-        <Card style={{ marginTop: 16 }}>
-  <h3 style={{ marginTop: 0, color: "#1e293b" }}>Plugin Runner</h3>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={onStartPlugin} style={navBtnOutline}>
+              Start
+            </button>
+            <button onClick={onStopPlugin} style={navBtnOutline}>
+              Stop
+            </button>
+          </div>
 
-  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-    <input
-      value={selectedPlugin}
-      onChange={(e) => setSelectedPlugin(e.target.value)}
-      placeholder="plugin slug e.g. about-us"
-      style={{ padding: 10, border: "2px solid #e2e8f0", borderRadius: 8, minWidth: 240 }}
-    />
-
-    <button onClick={onStartPlugin} style={{ padding: "10px 14px", borderRadius: 8 }}>
-      Start Plugin
-    </button>
-
-    {/* <button onClick={onRunPlugin} style={{ padding: "10px 14px", borderRadius: 8 }}>
-      Run Plugin
-    </button> */}
-
-    <button onClick={onStopPlugin} style={{ padding: "10px 14px", borderRadius: 8 }}>
-      Stop Plugin
-    </button>
-  </div>
-
-  {pluginBaseUrl && (
-    <div style={{ marginTop: 12, color: "#334155" }}>
-      <b>Runner URL:</b> {pluginBaseUrl}
-    </div>
-  )}
-
-  {/* {pluginResult && (
-    <pre style={{ marginTop: 12, background: "#0f172a", color: "#e2e8f0", padding: 12, borderRadius: 8 }}>
-      {pluginResult}
-    </pre>
-  )} */}
-</Card>
-
-
-        {/* Explorer + Editor */}
-        <Section title="Explorer & Editor" style={{ marginBottom: 40 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 12, height: "70vh" }}>
-            {/* Explorer */}
-            <Card style={{ overflow: "auto" }}>
-              <div style={{ fontWeight: 700, marginBottom: 6, color: "#334155" }}>
-                Explorer {cwd ? `: /${cwd}` : ""}
-              </div>
-              {(items.length > 0 || status?.project_present) ? (
-                <ul style={{ listStyle: "none", paddingLeft: 0, margin: 0 }}>
-                  {cwd !== "" && (
-                    <li>
-                      <button
-                        onClick={() => loadTree(cwd.split("/").slice(0, -1).join("/"))}
-                        style={{
-                          background: "#f8fafc",
-                          border: "1px solid #e2e8f0",
-                          borderRadius: 6,
-                          padding: "6px 10px",
-                          cursor: "pointer",
-                          color: "#0f172a",
-                        }}
-                      >
-                        ⬆️ Up
-                      </button>
-                    </li>
-                  )}
-                  {items.map((it) => (
-                    <li key={it.path} style={{ margin: "4px 0", display: "flex", gap: 6, alignItems: "center" }}>
-                      {it.type === "dir" ? (
-                        <button
-                          onClick={() => loadTree(it.path)}
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            padding: 0,
-                            color: "#0ea5e9",
-                            cursor: "pointer",
-                          }}
-                        >
-                          📁 {it.name}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => openFile(it.path)}
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            padding: 0,
-                            color: "#0ea5e9",
-                            cursor: "pointer",
-                          }}
-                        >
-                          📄 {it.name}
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <div style={{ opacity: 0.6 }}>Upload a project to browse files</div>
-              )}
-            </Card>
-
-            {/* Editor */}
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
-              <div
-                style={{
-                  padding: 10,
-                  borderBottom: "1px solid #e2e8f0",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <strong style={{ color: "#1e293b" }}>{openPath || "No file open"}</strong>
-                {dirty && <span style={{ color: "#d97706", fontWeight: 700 }}>(unsaved)</span>}
-                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                  <button
-                    onClick={saveFile}
-                    disabled={!openPath || !dirty}
-                    style={{
-                      padding: "8px 12px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: !openPath || !dirty ? "#cbd5e1" : "#3b82f6",
-                      color: "#0f172a",
-                      fontWeight: 700,
-                      cursor: !openPath || !dirty ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-              <Editor
-                height="100%"
-                language={guessLang(openPath)}
-                value={editorValue}
-                onChange={(v) => {
-                  setEditorValue(v ?? "");
-                  setDirty(true);
-                }}
-                options={{ fontSize: 14, minimap: { enabled: false }, readOnly: false }}
-              />
+          {pluginBaseUrl && (
+            <div style={{ marginTop: 10, fontSize: 12 }}>
+              {pluginBaseUrl}
             </div>
-          </div>
-        </Section>
-        
-      </main>
-
-      <style>{`
-        html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; }
-        #root { max-width: none !important; padding: 0 !important; }
-        * { box-sizing: border-box; }
-        a { text-decoration: none; }
-        a:hover { text-decoration: underline; }
-      `}</style>
+          )}
+        </div>
+      </div>
     </div>
-  );
+
+    {/* ================= BOTTOM LOGS ================= */}
+    <div
+      style={{
+        height: 120,
+        background: "#0c0a14",
+        borderTop: "1px solid #2d1f45",
+        padding: 12,
+        fontSize: 12,
+        overflowY: "auto",
+      }}
+    >
+      <div style={{ opacity: 0.6 }}>SYSTEM LOGS</div>
+    </div>
+
+    {/* ================= FOOTER ================= */}
+    <div
+      style={{
+        height: 28,
+        background: "#1a1328",
+        fontSize: 12,
+        display: "flex",
+        alignItems: "center",
+        padding: "0 12px",
+      }}
+    >
+      main* | UTF-8 | Docker
+    </div>
+  </div>
+);
 }
 
 /* ----------------------------- Routes ----------------------------- */
@@ -1006,3 +878,69 @@ function guessLang(path: string) {
   if (["xml"].includes(ext || "")) return "xml";
   return "plaintext";
 }
+
+
+// Css Parts
+const navBtn = {
+  minWidth: 38,
+  minHeight: 38,
+  padding: "6px 12px",
+  borderRadius: 6,
+  border: "#4F0C87",
+  background: "#4F0C87",
+  color: "white",
+  cursor: "pointer",
+};
+
+const navBtnOutline = {
+  padding: "6px 12px",
+  borderRadius: 6,
+  border: "1px solid #4F0C87",
+  background: "#4F0C87",
+  color: "#ffffff",
+  cursor: "pointer",
+};
+
+const navBtnDanger = {
+  padding: "6px 12px",
+  borderRadius: 6,
+  border: "1px solid #D30027",
+  background: "#D30027",
+  color: "#ffffff",
+  cursor: "pointer",
+};
+
+const inputDark = {
+  width: "100%",
+  padding: "8px 10px",
+  borderRadius: 6,
+  border: "1px solid #2d1f45",
+  background: "#0f0b1a",
+  color: "white",
+  outline: "none",
+  fontSize: 13,
+  boxSizing: "border-box" as const,  // 👈 IMPORTANT
+};
+
+const cardStyle = {
+  background: "#140d22",
+  padding: 14,
+  borderRadius: 10,
+  marginBottom: 16,
+};
+
+
+
+<style>{`
+  html, body, #root { height: 100%; }
+
+  .spin {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+`}</style>
+
