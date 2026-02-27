@@ -219,23 +219,45 @@ function Dashboard() {
   // Live URLs
   const [frontUrl, setFrontUrl] = useState<string>("");
   const [backUrl, setBackUrl] = useState<string>("");
-  const [showPreview, setShowPreview] = useState<boolean>(true);
+  // const [showPreview, setShowPreview] = useState<boolean>(true);
 
   // Plugin modal
   const [showPluginModal, setShowPluginModal] = useState(false);
   const navigate = useNavigate();
 
   const [selectedPlugin, setSelectedPlugin] = useState<string>("");
-const [pluginBaseUrl, setPluginBaseUrl] = useState<string>("");
+  const [runningPlugins, setRunningPlugins] = useState<
+    { name: string; url: string }[]
+  >([]);
+// const [pluginBaseUrl, setPluginBaseUrl] = useState<string>("");
 // const [pluginResult, setPluginResult] = useState<string>("");
 
-async function onStartPlugin() {
-  if (!selectedPlugin) return alert("Select a plugin slug first");
-  const res = await startPlugin({ slug: selectedPlugin, reuse: true });
-  setPluginBaseUrl(res.base_url);
-  alert(`Started: ${res.base_url}`);
-}
+// async function onStartPlugin() {
+//   if (!selectedPlugin) return alert("Select a plugin slug first");
+//   const res = await startPlugin({ slug: selectedPlugin, reuse: true });
+//   setPluginBaseUrl(res.base_url);
+//   alert(`Started: ${res.base_url}`);
+// }
+  async function onStartPlugin() {
+    if (!selectedPlugin) return alert("Select a plugin slug first");
 
+    try {
+      const res = await startPlugin({ slug: selectedPlugin, reuse: true });
+
+      const url = res.base_url;
+
+      setRunningPlugins((prev) => {
+        // prevent duplicates
+        if (prev.some((p) => p.name === selectedPlugin)) return prev;
+
+        return [...prev, { name: selectedPlugin, url }];
+      });
+
+      setSelectedPlugin("");
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to start plugin");
+    }
+  }
 // async function onRunPlugin() {
 //   if (!selectedPlugin) return alert("Select a plugin slug first");
 //   const res = await runPlugin({ slug: selectedPlugin, reuse: true, input: { test: true } });
@@ -247,13 +269,37 @@ async function onStartPlugin() {
 //   setPluginResult(JSON.stringify(res.result, null, 2));
 // }
 
-async function onStopPlugin() {
-  if (!selectedPlugin) return alert("Select a plugin slug first");
-  const res = await stopPlugin({ slug: selectedPlugin });
-  alert(res.stopped ? "Stopped" : "Not running");
-  setPluginBaseUrl("");
-}
+// async function onStopPlugin() {
+//   if (!selectedPlugin) return alert("Select a plugin slug first");
+//   const res = await stopPlugin({ slug: selectedPlugin });
+//   alert(res.stopped ? "Stopped" : "Not running");
+//   setPluginBaseUrl("");
+// }
 
+async function onStopPlugin(name?: string) {
+  const pluginName = name || selectedPlugin;
+
+  if (!pluginName) {
+    alert("Select a plugin slug first");
+    return;
+  }
+
+  try {
+    await stopPlugin({ slug: pluginName });
+
+    // Remove from running list
+    setRunningPlugins((prev) =>
+      prev.filter((p) => p.name !== pluginName)
+    );
+
+    // If stopped via input, clear input
+    if (!name) {
+      setSelectedPlugin("");
+    }
+  } catch (err: any) {
+    alert(err?.message ?? "Failed to stop plugin");
+  }
+}
 
   useEffect(() => {
     const root = document.getElementById("root");
@@ -577,39 +623,17 @@ async function onStopPlugin() {
         {/* Start Core */}
         <button
           onClick={dockerStartSingleButton}
-          style={{
-            minWidth: 38,
-            minHeight: 38,
-            padding: 8,
-            borderRadius: 8,
-            border: "none",
-            background: "#50B848",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-          }}
+          style={playBtn}
         >
-          <FaPlay size={16} color="white" />
+          <FaPlay size={20} color="white" />
         </button>
 
         <button
           onClick={dockerStopAll}
           title="Stop Core"
-          style={{
-            minWidth: 38,
-            minHeight: 38,
-            padding: 8,
-            borderRadius: 8,
-            border: "none",
-            background: "#D30027",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-          }}
+          style={stopBtn}
         >
-          <FaStop size={16} color="white" />
+          <FaStop size={20} color="white" />
 
           {/* <Square size={18} color="white" /> */}
         </button>
@@ -644,9 +668,11 @@ async function onStopPlugin() {
           overflowY: "auto",
         }}
       >
-        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 10, display: "flex" }}>
-          EXPLORER
-          <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "left"}}>
+        <div style={{ display: "flex", alignItems: "center",justifyContent: "space-between",marginBottom: 10, }}>
+          <div style={{ fontSize: 12, opacity: 0.6 }}>
+            EXPLORER
+          </div>
+          <div style={{ display: "flex", gap: 6}}>
             <button
               onClick={createNewFolder}
               style={smallBtn}
@@ -848,6 +874,8 @@ async function onStopPlugin() {
             Plugin Runner
           </div>
 
+          <div style={{display: "flex", gap:10}}>
+
           <input
             value={selectedPlugin}
             onChange={(e) => setSelectedPlugin(e.target.value)}
@@ -855,20 +883,55 @@ async function onStopPlugin() {
             style={inputDark}
           />
 
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={onStartPlugin} style={navBtnOutline}>
-              Start
+          <div style={{ display: "flex", gap: 8}}>
+            <button onClick={onStartPlugin} style={playBtn}>
+              <FaPlay size={20} color="white" />
             </button>
-            <button onClick={onStopPlugin} style={navBtnOutline}>
-              Stop
-            </button>
+            {/* <button onClick={() => onStopPlugin()} style={navBtnOutline}>
+            Stop
+          </button> */}
+          </div>
           </div>
 
-          {pluginBaseUrl && (
-            <div style={{ marginTop: 10, fontSize: 12 }}>
-              {pluginBaseUrl}
+          {runningPlugins.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 14, opacity: 0.6, marginBottom: 6 }}>
+              Running Plugins
             </div>
-          )}
+
+            {runningPlugins.map((plugin) => (
+              <div
+                key={plugin.name}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "#1f1535",
+                  marginBottom: 6,
+                  fontSize: 12,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 500, fontSize: 14 }}>
+                    {plugin.name}
+                  </div>
+                  {/* <div style={{ opacity: 0.6 }}>
+                    {plugin.url}
+                  </div> */}
+                </div>
+
+                <button
+                  onClick={() => onStopPlugin(plugin.name)}
+                  style={stopBtn}
+                >
+                  <FaStop size={20} color="white" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         </div>
       </div>
     </div>
@@ -963,13 +1026,14 @@ const navBtnDanger = {
 
 const inputDark = {
   width: "100%",
+  minHeight: 38,
   padding: "8px 10px",
   borderRadius: 6,
   border: "1px solid #2d1f45",
   background: "#0f0b1a",
   color: "white",
   outline: "none",
-  fontSize: 13,
+  fontSize: 16,
   boxSizing: "border-box" as const,  // 👈 IMPORTANT
 };
 
@@ -990,6 +1054,31 @@ const smallBtn = {
   cursor: "pointer",
 };
 
+const playBtn = {
+  minWidth: 38,
+  minHeight: 38,
+  padding: 8,
+  borderRadius: 8,
+  border: "none",
+  background: "#50B848",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+};
+
+const stopBtn ={
+  minWidth: 38,
+  minHeight: 38,
+  padding: 8,
+  borderRadius: 8,
+  border: "none",
+  background: "#D30027",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+};
 
 
 <style>{`
