@@ -1,33 +1,48 @@
-// SecureGenerator.tsx
+// Securegenerator.tsx
 import { useState } from "react";
 import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
 import { FileSearch, CheckCircle2, MinusCircle, Workflow } from "lucide-react";
 
 /* ---------- Types ---------- */
-type SemgrepFinding = {
+type Finding = {
   check_id?: string;
   severity?: string;
   message?: string;
   path?: string;
-  start?: { line?: number; col?: number };
-  end?: { line?: number; col?: number };
-  metadata?: Record<string, unknown>;
+  start?: { line?: number };
+  has_autofix?: boolean;
 };
 
 type SemgrepReport = {
   ok?: boolean;
-  exit_code?: number;
-  file_count?: number;
-  files?: string[];
-  languages?: string[];
+  initial_findings?: number;
+  final_findings?: number;
+  autofix_applied?: boolean;
+  fixes_applied?: number;
+  auto_fixable_count?: number;
+  manual_only_count?: number;
   packs?: string[];
-  findings: SemgrepFinding[];
-  errors?: Array<Record<string, unknown>>;
-  error?: string;
-  stats?: Record<string, unknown>;
+  languages?: string[];
+  file_count?: number;
+  categorized_findings?: {
+    initially_auto_fixable?: Finding[];
+    initially_manual_only?: Finding[];
+    still_remaining?: Finding[];
+    remaining_needs_llm?: Finding[];
+  };
 };
 
-/* ---------- Rule-based UML Types ---------- */
+type LlmFixReport = {
+  fixed?: boolean;
+  attempted?: boolean;
+  issues_before?: number;
+  issues_after?: number;
+  fixes_applied?: number;
+  error?: string;
+  reason?: string;
+};
+
+/* ---------- UML Types (her additions) ---------- */
 type UmlValidationEntry = {
   ok: boolean;
   errors: string[];
@@ -41,15 +56,12 @@ type UmlReport = {
   ok?: boolean;
   file_count?: number;
   error?: string | null;
-
-  // merged CIR (returned by backend/vibe-secure-gen)
   cir?: unknown;
-
   class_svg?: string | null;
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
-  activity_svg?: string | null;    // ← NEW
+  activity_svg?: string | null;
   validation?: UmlValidationMap;
 };
 
@@ -57,30 +69,33 @@ type Report = {
   policy_version?: string;
   prompt_after_enhancement?: string;
   semgrep?: SemgrepReport;
-  security?: {
-    injection_patterns_detected?: string[];
-    injection_blocked?: boolean;
-  };
+  llm_fix?: LlmFixReport;
   uml?: UmlReport;
+  total_fixes_applied?: number;
+  fix_summary?: {
+    initial_issues?: number;
+    semgrep_fixed?: number;
+    llm_fixed?: number;
+    remaining_issues?: number;
+    fix_rate_percent?: number;
+  };
 };
 
 type ApiResult = {
   code: string;
+  original_code?: string;
   report: Report;
   decision?: string;
 };
 
-/* ---------- Styled Bits ---------- */
+/* ---------- API endpoints ---------- */
+const API = "http://localhost:8000/api/generate";
+const UML_AI_API = "http://localhost:7081/uml/ai";
+
+/* ---------- Styled Components ---------- */
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <div style={{ marginTop: 24 }}>
-    <h2
-      style={{
-        margin: "0 0 12px 0",
-        fontSize: 18,
-        fontWeight: 600,
-        color: "#1e293b",
-      }}
-    >
+    <h2 style={{ margin: "0 0 12px 0", fontSize: 18, fontWeight: 600, color: "#1e293b" }}>
       {title}
     </h2>
     <div
@@ -97,71 +112,65 @@ const Section = ({ title, children }: { title: string; children: React.ReactNode
   </div>
 );
 
-const Badge = ({ ok }: { ok: boolean }) => (
-  <span
+const StatCard = ({ label, value, color }: { label: string; value: number; color: string }) => (
+  <div
     style={{
-      display: "inline-block",
-      padding: "4px 12px",
-      borderRadius: 16,
-      fontSize: 12,
-      fontWeight: 600,
-      background: ok ? "#dcfce7" : "#fee2e2",
-      color: ok ? "#166534" : "#991b1b",
-      border: `1px solid ${ok ? "#86efac" : "#fca5a5"}`,
+      padding: 16,
+      background: "#f8fafc",
+      borderRadius: 8,
+      border: "1px solid #e2e8f0",
     }}
   >
-    {ok ? "✓ PASS" : "✗ FAIL"}
-  </span>
+    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>{label}</div>
+    <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
+  </div>
 );
 
-const sevColor = (sev?: string) => {
-  const s = (sev || "").toUpperCase();
-  if (s.includes("CRITICAL") || s.includes("HIGH") || s.includes("ERROR")) return "#dc2626";
-  if (s.includes("MED") || s.includes("WARN")) return "#f59e0b";
-  if (s.includes("LOW") || s.includes("INFO")) return "#3b82f6";
-  return "#64748b";
-};
+const ProgressBar = ({ current, total }: { current: number; total: number }) => {
+  const percentage = total > 0 ? (current / total) * 100 : 0;
+  const color = percentage >= 80 ? "#10b981" : percentage >= 50 ? "#f59e0b" : "#ef4444";
 
-/* ---------- Diagram status indicator ---------- */
-type DiagramStatusProps = {
-  label: string;
-  hasSvg: boolean | null | undefined;
-};
-
-function DiagramStatus({ label, hasSvg }: DiagramStatusProps) {
   return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-      }}
-    >
-      {label}:{" "}
-      {hasSvg ? (
-        <CheckCircle2 size={16} color="#16a34a" />
-      ) : (
-        <MinusCircle size={16} color="#94a3b8" />
-      )}
-      {hasSvg ? "available" : "—"}
-    </span>
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
+        <span style={{ color: "#64748b" }}>
+          Fixed: {current} / {total}
+        </span>
+        <span style={{ color, fontWeight: 600 }}>{percentage.toFixed(0)}%</span>
+      </div>
+      <div
+        style={{
+          width: "100%",
+          height: 8,
+          background: "#e2e8f0",
+          borderRadius: 4,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${percentage}%`,
+            height: "100%",
+            background: color,
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+    </div>
   );
-}
+};
 
-/* ---------- API endpoints ---------- */
-const API        = "http://localhost:8000/api/generate";
-const UML_AI_API = "http://localhost:7081/uml/ai";
-
-/* ---------- Component ---------- */
+/* ---------- Main Component ---------- */
 export default function Securegenerator() {
-  const [prompt, setPrompt]   = useState("");
-  const [out, setOut]         = useState<ApiResult | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [out, setOut] = useState<ApiResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied]   = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
 
-  // UML modal state
-  const [umlOpen, setUmlOpen]       = useState(false);
-  const [umlTab, setUmlTab]         = useState<DiagramType>("class");
+  // UML modal state (her additions)
+  const [umlOpen, setUmlOpen] = useState(false);
+  const [umlTab, setUmlTab] = useState<DiagramType>("class");
   const [aiUmlCache, setAiUmlCache] = useState<AiUmlStore>({});
 
   const onGenerate = async () => {
@@ -169,6 +178,7 @@ export default function Securegenerator() {
     setOut(null);
     setCopied(false);
     setUmlOpen(false);
+    setShowOriginal(false);
     setAiUmlCache({});
 
     try {
@@ -194,6 +204,9 @@ export default function Securegenerator() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const fixSummary = out?.report?.fix_summary;
+  const semgrep = out?.report?.semgrep;
+  const llmFix = out?.report?.llm_fix;
   const uml = out?.report?.uml;
 
   return (
@@ -211,8 +224,7 @@ export default function Securegenerator() {
           width: "100%",
           maxWidth: "100%",
           margin: "0 auto",
-          fontFamily:
-            "system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif",
+          fontFamily: "system-ui, -apple-system, sans-serif",
         }}
       >
         {/* Header */}
@@ -225,18 +237,11 @@ export default function Securegenerator() {
             marginBottom: 24,
           }}
         >
-          <h1
-            style={{
-              margin: "0 0 8px 0",
-              fontSize: 28,
-              fontWeight: 700,
-              color: "#1e293b",
-            }}
-          >
+          <h1 style={{ margin: "0 0 8px 0", fontSize: 28, fontWeight: 700, color: "#1e293b" }}>
             🔒 Secure-by-Design Code Generator
           </h1>
           <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>
-            OWASP Protected • Multi-Language Support • Automatic SAST Analysis • AI-Powered Security
+            Hybrid Autofix: Semgrep Native + LLM Intelligence • OWASP Protected • Multi-Language
           </p>
         </div>
 
@@ -259,9 +264,8 @@ export default function Securegenerator() {
               color: "#334155",
             }}
           >
-            Describe the code you want to generate (any language)
+            Describe the code you want to generate
           </label>
-
           <textarea
             rows={5}
             style={{
@@ -275,7 +279,7 @@ export default function Securegenerator() {
               outline: "none",
               boxSizing: "border-box",
             }}
-            placeholder="e.g., Build a REST API for user authentication with JWT tokens in Python Flask, or Create a React component for a todo list with localStorage"
+            placeholder="e.g., Build a user authentication API with JWT in Java, or Create a Python Flask app with SQL database"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
@@ -330,29 +334,118 @@ export default function Securegenerator() {
               boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
             }}
           >
-            {/* Security Alerts */}
-            {out.report?.security?.injection_patterns_detected &&
-              out.report.security.injection_patterns_detected.length > 0 && (
+            {/* Auto-Fix Results */}
+            {fixSummary && fixSummary.initial_issues! > 0 && (
+              <Section title="🔧 Auto-Fix Results">
                 <div
                   style={{
-                    marginBottom: 24,
-                    padding: 16,
-                    background: "#fef2f2",
-                    borderRadius: 8,
-                    border: "2px solid #fca5a5",
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                    gap: 12,
+                    marginBottom: 16,
                   }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#991b1b", marginBottom: 4 }}>
-                    ⚠️ Security Alert: Prompt Injection Detected
+                  <StatCard label="Initial Issues" value={fixSummary.initial_issues!} color="#ef4444" />
+                  <StatCard label="Semgrep Fixed" value={fixSummary.semgrep_fixed!} color="#10b981" />
+                  {fixSummary.llm_fixed! > 0 && (
+                    <StatCard label="LLM Fixed" value={fixSummary.llm_fixed!} color="#3b82f6" />
+                  )}
+                  <StatCard
+                    label="Remaining"
+                    value={fixSummary.remaining_issues!}
+                    color={fixSummary.remaining_issues === 0 ? "#10b981" : "#f59e0b"}
+                  />
+                </div>
+
+                <ProgressBar
+                  current={fixSummary.semgrep_fixed! + fixSummary.llm_fixed!}
+                  total={fixSummary.initial_issues!}
+                />
+
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 12,
+                    background: "#f8fafc",
+                    borderRadius: 6,
+                    fontSize: 13,
+                  }}
+                >
+                  <div style={{ marginBottom: 4, color: "#475569" }}>
+                    ✅ <strong>Auto-fixable (Semgrep):</strong> {semgrep?.auto_fixable_count || 0} rules
                   </div>
-                  <div style={{ fontSize: 13, color: "#b91c1c" }}>
-                    Blocked patterns: {out.report.security.injection_patterns_detected.join(", ")}
+                  <div style={{ color: "#475569" }}>
+                    🔧 <strong>Required LLM:</strong> {semgrep?.manual_only_count || 0} rules
                   </div>
                 </div>
-              )}
+
+                {fixSummary.remaining_issues === 0 && fixSummary.initial_issues! > 0 && (
+                  <div
+                    style={{
+                      marginTop: 16,
+                      padding: 16,
+                      background: "linear-gradient(135deg, #dcfce7 0%, #86efac 100%)",
+                      borderRadius: 8,
+                      textAlign: "center",
+                      fontSize: 15,
+                      fontWeight: 600,
+                      color: "#166534",
+                    }}
+                  >
+                    🎉 All {fixSummary.initial_issues} vulnerabilities automatically fixed!
+                  </div>
+                )}
+
+                {llmFix?.attempted && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: 12,
+                      background: llmFix.fixed ? "#eff6ff" : "#fef2f2",
+                      borderRadius: 6,
+                      fontSize: 13,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        color: llmFix.fixed ? "#1e40af" : "#991b1b",
+                        marginBottom: 4,
+                      }}
+                    >
+                      {llmFix.fixed ? "🤖 LLM Fix Applied" : "⚠️ LLM Fix Status"}
+                    </div>
+                    <div style={{ color: llmFix.fixed ? "#1e40af" : "#991b1b" }}>
+                      {llmFix.fixed
+                        ? `Fixed ${llmFix.fixes_applied} complex issues`
+                        : llmFix.error || llmFix.reason || "Not successful"}
+                    </div>
+                  </div>
+                )}
+              </Section>
+            )}
 
             {/* Generated Code */}
             <Section title="📝 Generated Code">
+              {out.original_code && out.original_code !== out.code && (
+                <div style={{ marginBottom: 12 }}>
+                  <button
+                    onClick={() => setShowOriginal(!showOriginal)}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: 6,
+                      border: "1px solid #e2e8f0",
+                      background: showOriginal ? "#3b82f6" : "white",
+                      color: showOriginal ? "white" : "#3b82f6",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {showOriginal ? "Show Fixed Code" : "Show Original Code"}
+                  </button>
+                </div>
+              )}
               <pre
                 style={{
                   whiteSpace: "pre-wrap",
@@ -367,11 +460,11 @@ export default function Securegenerator() {
                   maxHeight: 600,
                 }}
               >
-                {out.code}
+                {showOriginal ? out.original_code : out.code}
               </pre>
             </Section>
 
-            {/* UML summary + modal trigger */}
+            {/* UML Diagrams — her upgrades: lucide icons, UmlViewerModal, 4 diagram types, AI cache */}
             <Section title="📊 UML Diagrams (Rule-based, AI-based)">
               {!uml || uml.error ? (
                 <div
@@ -402,8 +495,6 @@ export default function Securegenerator() {
                       <FileSearch size={16} />
                       <span>Files analysed for UML: {uml.file_count ?? 0}</span>
                     </div>
-
-                    {/* ← Diagram status grid now includes Activity */}
                     <div
                       style={{
                         display: "flex",
@@ -413,30 +504,43 @@ export default function Securegenerator() {
                         marginTop: 8,
                       }}
                     >
-                      <DiagramStatus label="Class diagram"     hasSvg={!!uml.class_svg} />
-                      <span style={{ opacity: 0.4 }}>|</span>
-                      <DiagramStatus label="Package diagram"   hasSvg={!!uml.package_svg} />
-                      <span style={{ opacity: 0.4 }}>|</span>
-                      <DiagramStatus label="Sequence diagram"  hasSvg={!!uml.sequence_svg} />
-                      <span style={{ opacity: 0.4 }}>|</span>
-                      <DiagramStatus label="Component diagram" hasSvg={!!uml.component_svg} />
-                      <span style={{ opacity: 0.4 }}>|</span>
-                      <DiagramStatus label="Activity diagram"  hasSvg={!!uml.activity_svg} />
+                      {(
+                        [
+                          { key: "class_svg" as const, label: "Class diagram" },
+                          { key: "package_svg" as const, label: "Package diagram" },
+                          { key: "sequence_svg" as const, label: "Sequence diagram" },
+                          { key: "component_svg" as const, label: "Component diagram" },
+                          { key: "activity_svg" as const, label: "Activity diagram" },
+                        ]
+                      ).map(({ key, label }, idx, arr) => (
+                        <span key={key} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          {label}:{" "}
+                          {uml[key] ? (
+                            <CheckCircle2 size={16} color="#16a34a" />
+                          ) : (
+                            <MinusCircle size={16} color="#94a3b8" />
+                          )}
+                          {uml[key] ? "available" : "—"}
+                          {idx < arr.length - 1 && (
+                            <span style={{ opacity: 0.4, marginLeft: 6 }}>•</span>
+                          )}
+                        </span>
+                      ))}
                     </div>
                   </div>
 
                   <button
                     onClick={() => {
                       if (!uml) return;
-
-                      // Pick the first available diagram as the default tab
-                      const defaultTab: DiagramType =
-                        uml.class_svg     ? "class"
-                        : uml.package_svg   ? "package"
-                        : uml.sequence_svg  ? "sequence"
-                        : uml.component_svg ? "component"
-                        : "activity";   // ← fallback to activity if others absent
-
+                      const defaultTab: DiagramType = uml.class_svg
+                        ? "class"
+                        : uml.package_svg
+                        ? "package"
+                        : uml.sequence_svg
+                        ? "sequence"
+                        : uml.component_svg
+                        ? "component"
+                        : "activity";
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
                     }}
@@ -462,140 +566,32 @@ export default function Securegenerator() {
               )}
             </Section>
 
-            {/* SAST Report */}
-            <Section title="🔍 SAST Analysis (Semgrep)">
-              {out.report?.semgrep?.error && (
-                <div
-                  style={{
-                    color: "#dc2626",
-                    padding: 12,
-                    background: "#fef2f2",
-                    borderRadius: 6,
-                    fontSize: 14,
-                  }}
-                >
-                  ⚠️ Semgrep error: {out.report.semgrep.error}
-                </div>
-              )}
-
-              {out.report?.semgrep && !out.report.semgrep.error && (
-                <>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 16,
-                      marginBottom: 16,
-                      flexWrap: "wrap",
-                      padding: 12,
-                      background: "#f8fafc",
-                      borderRadius: 6,
-                    }}
-                  >
-                    <div style={{ fontSize: 13, color: "#475569" }}>
-                      <strong>Packs:</strong>{" "}
-                      {(out.report.semgrep.packs || []).join(", ") || "p/owasp-top-ten"}
-                    </div>
-                    <div style={{ fontSize: 13, color: "#475569" }}>
-                      <strong>Languages:</strong>{" "}
-                      {(out.report.semgrep.languages || []).join(", ") || "n/a"}
-                    </div>
-                    <div style={{ fontSize: 13, color: "#475569" }}>
-                      <strong>Files:</strong> {out.report.semgrep.file_count ?? 0}
-                    </div>
-
-                    <Badge ok={Boolean(out.report.semgrep.findings?.length === 0)} />
-
-                    <div style={{ fontSize: 13, color: "#64748b" }}>
-                      {(out.report.semgrep.findings?.length ?? 0)} finding
-                      {(out.report.semgrep.findings?.length ?? 0) === 1 ? "" : "s"}
-                    </div>
-                  </div>
-
-                  {out.report.semgrep.findings && out.report.semgrep.findings.length > 0 ? (
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                        <thead>
-                          <tr style={{ background: "#f8fafc" }}>
-                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
-                              Severity
-                            </th>
-                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
-                              Rule
-                            </th>
-                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
-                              Message
-                            </th>
-                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
-                              Location
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {out.report.semgrep.findings.map((f, i) => (
-                            <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                              <td style={{ padding: 12, color: sevColor(f.severity), fontWeight: 600 }}>
-                                {f.severity ?? "INFO"}
-                              </td>
-                              <td style={{ padding: 12 }}>
-                                <code style={{ fontSize: 11, background: "#f1f5f9", padding: "2px 6px", borderRadius: 4 }}>
-                                  {f.check_id}
-                                </code>
-                              </td>
-                              <td style={{ padding: 12, color: "#475569" }}>{f.message}</td>
-                              <td style={{ padding: 12, color: "#64748b", fontSize: 12 }}>
-                                {f.path}
-                                {f.start?.line ? `:${f.start.line}` : ""}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        padding: 16,
-                        background: "#f0fdf4",
-                        borderRadius: 6,
-                        color: "#166534",
-                        fontSize: 14,
-                      }}
-                    >
-                      ✓ No security issues detected by Semgrep
-                    </div>
-                  )}
-                </>
-              )}
-            </Section>
-
             {/* Security Report */}
             <Section title="📋 Security Report">
               <div style={{ marginBottom: 12, fontSize: 12, color: "#64748b" }}>
                 Policy: {out.report.policy_version ?? "N/A"}
               </div>
-              <details style={{ cursor: "pointer" }}>
+              <details>
                 <summary
                   style={{
                     fontWeight: 600,
                     padding: "8px 0",
                     color: "#3b82f6",
-                    userSelect: "none",
+                    cursor: "pointer",
                   }}
                 >
-                  View Enhanced Prompt Details
+                  View Enhanced Prompt
                 </summary>
                 <pre
                   style={{
                     whiteSpace: "pre-wrap",
                     margin: "12px 0 0 0",
                     fontSize: 11,
-                    lineHeight: 1.6,
                     background: "#f8fafc",
                     padding: 16,
                     borderRadius: 6,
-                    overflow: "auto",
                     maxHeight: 400,
+                    overflow: "auto",
                     color: "#334155",
                   }}
                 >
@@ -616,11 +612,11 @@ export default function Securegenerator() {
             fontSize: 13,
           }}
         >
-          Protected by OWASP LLM01 • Multi-Language Support • Powered by Gemini AI
+          Hybrid Autofix: Semgrep Native (~35%) + LLM Intelligence (~65%) • OWASP Protected • Multi-Language
         </div>
       </main>
 
-      {/* UML Modal */}
+      {/* UML Modal (her addition) */}
       {uml && !uml.error && (
         <UmlViewerModal
           open={umlOpen}
@@ -635,12 +631,6 @@ export default function Securegenerator() {
           setAiStore={setAiUmlCache}
         />
       )}
-
-      <style>{`
-        html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; }
-        #root { max-width: none !important; padding: 0 !important; }
-        * { box-sizing: border-box; }
-      `}</style>
     </div>
   );
 }
