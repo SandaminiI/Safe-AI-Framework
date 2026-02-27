@@ -152,6 +152,10 @@ CRITICAL DO-NOT:
   5. Do NOT use short package names — always use full FQN (com.example.app.service).
   6. Do NOT add colors or stereotypes.
   7. Include EVERY type from the context in its correct package.
+  8. Do NOT nest package blocks inside other package blocks. EVERY package must be
+     at the TOP LEVEL — never write  package "com" { package "example" { ... } }
+     WRONG:  package "com" { package "example" { class Foo } }
+     RIGHT:  package "com.example" { class Foo }
 """.strip()
 
 _SEQUENCE_SYSTEM = _BASE_SYSTEM + """
@@ -351,6 +355,9 @@ RULES (violations = wrong diagram):
 - NOT this:  [ClassName]           (no bracket syntax — that is component style)
 - ALL arrows go AFTER all package blocks, never inside.
 - Arrow types:  --|>  ..|>  -->  ..>
+- NEVER nest package blocks — ALL packages must be flat at the top level:
+    WRONG:  package "com" { package "example" { class Foo } }
+    RIGHT:  package "com.example" { class Foo }  ..>
 """.strip()
 
 _SEQUENCE_REMINDER = """
@@ -447,6 +454,168 @@ def _inject_after_startuml(plantuml: str, lines_to_inject: list) -> str:
     return "\n".join(result)
 
 
+def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
+    import re as _re
+
+    # Quick guard — only process if actual nesting exists
+    if not _re.search(
+        r'package\s+"[^"]+"\s*\{[^}]*package\s+"[^"]+"\s*\{',
+        plantuml, _re.DOTALL
+    ):
+        return plantuml
+
+    start_m = _re.search(r'@startuml\b', plantuml, _re.IGNORECASE)
+    end_m   = _re.search(r'@enduml\b',   plantuml, _re.IGNORECASE)
+    if not start_m or not end_m:
+        return plantuml
+
+    header_end = start_m.end()
+    body       = plantuml[header_end:end_m.start()]
+
+    # ── Separate skinparam/comment header lines from package/arrow body ────────
+    header_lines  = []
+    content_lines = []
+    in_skinparam  = False
+    sp_depth      = 0
+
+    for line in body.splitlines():
+        s = line.strip()
+        if in_skinparam:
+            header_lines.append(line)
+            sp_depth += s.count("{") - s.count("}")
+            if sp_depth <= 0:
+                in_skinparam = False
+            continue
+        if s.startswith("skinparam") and "{" in s:
+            in_skinparam = True
+            sp_depth = s.count("{") - s.count("}")
+            header_lines.append(line)
+            continue
+        if s.startswith("skinparam") or s.startswith("'") or s.startswith("!"):
+            header_lines.append(line)
+            continue
+        content_lines.append(line)
+
+    content = "\n".join(content_lines)
+
+    # ── Recursive parser: collect {generated_fqn -> [type_lines]} + arrows ────
+    pkg_types:  dict = {}
+    arrow_lines = []
+
+    def _parse(text: str, prefix: str) -> None:
+        lines = text.splitlines()
+        n = len(lines)
+        i = 0
+        while i < n:
+            raw = lines[i]
+            s   = raw.strip()
+
+            # Package block — quoted or unquoted name, optional stereotype
+            pm = _re.match(
+                r'^package\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+?))\s*(?:<<[^>]*>>)?\s*\{',
+                s
+            )
+            if pm:
+                pkg_name = (pm.group(1) or pm.group(2) or pm.group(3) or "").strip()
+                new_pfx  = f"{prefix}.{pkg_name}" if prefix else pkg_name
+                open_ct  = s.count("{")
+                close_ct = s.count("}")
+                # Single-line block: package "name" { ... } on one line
+                if open_ct == close_ct and open_ct > 0:
+                    inner_m = _re.search(r'\{(.*)\}', s)
+                    if inner_m:
+                        _parse(inner_m.group(1).strip(), new_pfx)
+                    i += 1
+                    continue
+                # Multi-line block: collect until matching closing brace
+                depth = open_ct - close_ct
+                j = i + 1
+                block = []
+                while j < n and depth > 0:
+                    bl = lines[j]
+                    bls = bl.strip()
+                    depth += bls.count("{") - bls.count("}")
+                    if depth > 0:
+                        block.append(bl)
+                    j += 1
+                _parse("\n".join(block), new_pfx)
+                i = j
+                continue
+
+            # Type declaration without body
+            tm = _re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*$', s)
+            if tm:
+                key = prefix or "(default)"
+                pkg_types.setdefault(key, []).append(f"{tm.group(1)} {tm.group(2)}")
+                i += 1
+                continue
+
+            # Type declaration WITH body — strip body, keep keyword+name
+            tbm = _re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*\{', s)
+            if tbm:
+                key = prefix or "(default)"
+                pkg_types.setdefault(key, []).append(f"{tbm.group(1)} {tbm.group(2)}")
+                depth = s.count("{") - s.count("}")
+                i += 1
+                while i < n and depth > 0:
+                    depth += lines[i].strip().count("{") - lines[i].strip().count("}")
+                    i += 1
+                continue
+
+            # Relationship arrows — all PlantUML variants (-->, ..>, ..|>, --|>, etc.)
+            if s and not s.startswith("'"):
+                if _re.search(r'(-{2,}|\.{2,})[|><!]|[|><!](-{2,}|\.{2,})', s):
+                    arrow_lines.append(s)
+            i += 1
+
+    _parse(content, "")
+
+    # ── FQN remapping: fix shortened names using known_fqns from CIR ──────────
+    # Build suffix → canonical_fqn lookup from longest suffix to shortest
+    # so "bankmanagementsystem.controller" beats "controller" if both match.
+    fqn_remap: dict = {}
+    if known_fqns:
+        for fqn in known_fqns:
+            parts = fqn.split(".")
+            for length in range(1, len(parts) + 1):
+                suffix = ".".join(parts[-length:])
+                # Longer suffix wins over shorter (more specific match)
+                if suffix not in fqn_remap or len(fqn) > len(fqn_remap[suffix]):
+                    fqn_remap[suffix] = fqn
+
+    def _remap(pkg: str) -> str:
+        return fqn_remap.get(pkg, pkg)
+
+    # ── Rebuild flat output ────────────────────────────────────────────────────
+    out = [plantuml[:header_end].rstrip(), ""]
+    prev_blank = True
+    for hl in header_lines:
+        if hl.strip() == "":
+            if not prev_blank:
+                out.append("")
+            prev_blank = True
+        else:
+            out.append(hl)
+            prev_blank = False
+    out.append("")
+
+    for fqn in sorted(pkg_types.keys()):
+        canonical = _remap(fqn)
+        out.append(f'package "{canonical}" {{')
+        for tl in sorted(set(pkg_types[fqn])):
+            out.append(f"  {tl}")
+        out.append("}")
+        out.append("")
+
+    if arrow_lines:
+        for al in sorted(set(arrow_lines)):
+            out.append(al)
+        out.append("")
+
+    out.append("@enduml")
+    return "\n".join(out)
+
+
 def _fix_component_assembly_connectors(plantuml: str) -> str:
     """
     Deterministically enforce assembly connectors in component diagrams.
@@ -491,7 +660,7 @@ def _fix_component_assembly_connectors(plantuml: str) -> str:
     return "\n".join(result)
 
 
-def _post_process(plantuml: str, diagram_type: str) -> str:
+def _post_process(plantuml: str, diagram_type: str, known_fqns: list = None) -> str:
     dt = (diagram_type or "class").lower().strip()
 
     if dt == "class":
@@ -510,6 +679,8 @@ def _post_process(plantuml: str, diagram_type: str) -> str:
             needed.append("skinparam shadowing            false")
         if needed:
             plantuml = _inject_after_startuml(plantuml, needed)
+        # Flatten any nested/shortened package blocks Gemini emits into flat FQN labels
+        plantuml = _flatten_package_diagram(plantuml, known_fqns=known_fqns)
 
     elif dt == "sequence":
         needed = []
@@ -627,6 +798,27 @@ def _extract_plantuml(text: str) -> str:
 #  PUBLIC ENTRY POINT
 # =============================================================================
 
+def _extract_known_fqns(context: str) -> list:
+    import re as _re
+    fqns = set()
+
+    # Pattern 1: package "com.example.app.service" { lines in context
+    for m in _re.finditer(
+        r'package\s+"([a-zA-Z][a-zA-Z0-9._]*\.[a-zA-Z][a-zA-Z0-9._]*)"',
+        context
+    ):
+        fqns.add(m.group(1).strip())
+
+    # Pattern 2: package: com.example.app.service  in type listing lines
+    for m in _re.finditer(
+        r'package:\s*([a-zA-Z][a-zA-Z0-9._]*\.[a-zA-Z][a-zA-Z0-9._]*)',
+        context
+    ):
+        fqns.add(m.group(1).rstrip(")").rstrip())
+
+    return sorted(fqns)
+
+
 def generate_plantuml_from_context(
     context: str,
     diagram_type: Literal["class", "package", "sequence", "component"] = "class",
@@ -636,6 +828,9 @@ def generate_plantuml_from_context(
 
     dt     = (diagram_type or "class").lower().strip()
     prompt = _build_prompt(context, dt)
+
+    # Extract known FQNs from context for package diagram post-processing
+    known_fqns = _extract_known_fqns(context) if dt == "package" else None
 
     model = genai.GenerativeModel(
         GEMINI_MODEL,
@@ -673,7 +868,7 @@ def generate_plantuml_from_context(
     if dt == "class":
         plantuml = _strip_package_blocks(plantuml)
 
-    # All diagrams: enforce mandatory skinparam headers
-    plantuml = _post_process(plantuml, dt)
+    # All diagrams: enforce mandatory skinparam headers + diagram-specific fixes
+    plantuml = _post_process(plantuml, dt, known_fqns=known_fqns)
 
     return plantuml
