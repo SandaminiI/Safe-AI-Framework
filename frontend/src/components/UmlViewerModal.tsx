@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { X, Box, Boxes, GitBranch, Eye, Download } from "lucide-react";
-
-export type DiagramType = "class" | "package" | "sequence" | "component";
+import { X, Box, Boxes, GitBranch, Eye, Download, Activity } from "lucide-react";
+export type DiagramType = "class" | "package" | "sequence" | "component" | "activity";
 
 type UmlValidation = {
   ok: boolean;
@@ -16,6 +15,7 @@ type UmlReport = {
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
+  activity_svg?: string | null;
   validation?: Partial<Record<DiagramType, UmlValidation>>;
 };
 
@@ -64,7 +64,6 @@ function downloadPng(svgString: string, filename: string, containerEl: HTMLEleme
   let width  = 0;
   let height = 0;
 
-  // Try explicit width/height attrs first
   const wAttr = svgEl.getAttribute("width");
   const hAttr = svgEl.getAttribute("height");
   if (wAttr && hAttr) {
@@ -79,7 +78,6 @@ function downloadPng(svgString: string, filename: string, containerEl: HTMLEleme
     height = parseFloat(vb[3]);
   }
 
-  // Last resort — use the rendered size of the container
   if ((!width || !height) && containerEl) {
     const rect = containerEl.getBoundingClientRect();
     width  = rect.width  || 800;
@@ -118,7 +116,6 @@ function downloadPng(svgString: string, filename: string, containerEl: HTMLEleme
 
   img.onerror = () => {
     URL.revokeObjectURL(url);
-    // Fallback: just download the SVG instead
     downloadSvg(svgString, filename.replace(".png", ".svg"));
   };
 
@@ -156,10 +153,7 @@ export default function UmlViewerModal({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
-  // prevent duplicate in-flight requests per tab
   const inflightRef = useRef<Partial<Record<DiagramType, boolean>>>({});
-
-  // ref to the SVG container (used for PNG size fallback)
   const svgContainerRef = useRef<HTMLDivElement>(null);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -173,6 +167,7 @@ export default function UmlViewerModal({
         package: uml?.package_svg ?? null,
         sequence: uml?.sequence_svg ?? null,
         component: uml?.component_svg ?? null,
+        activity: uml?.activity_svg  ?? null,
       }) as Record<DiagramType, string | null>,
     [uml]
   );
@@ -184,12 +179,13 @@ export default function UmlViewerModal({
         package: aiStore.package?.svg ?? null,
         sequence: aiStore.sequence?.svg ?? null,
         component: aiStore.component?.svg ?? null,
+        activity: aiStore.activity?.svg ?? null,  // ← NEW
       }) as Record<DiagramType, string | null>,
     [aiStore]
   );
 
   const hasAnyAi = useMemo(
-    () => Boolean(aiSvgs.class || aiSvgs.package || aiSvgs.sequence || aiSvgs.component),
+    () => Boolean(aiSvgs.class || aiSvgs.package || aiSvgs.sequence || aiSvgs.component || aiSvgs.activity),
     [aiSvgs]
   );
 
@@ -392,7 +388,7 @@ export default function UmlViewerModal({
               </button>
             </div>
 
-            {/* ── Download button ── */}
+            {/* Download button */}
             {activeSvg && (
               <DownloadMenu onDownload={handleDownload} />
             )}
@@ -470,6 +466,13 @@ export default function UmlViewerModal({
             active={tab === "component"}
             disabled={!tabEnabled("component")}
             onClick={() => setTab("component")}
+          />
+          <TabButton
+            label="Activity Diagram"
+            icon={<Activity size={16} />}
+            active={tab === "activity"}
+            disabled={!tabEnabled("activity")}
+            onClick={() => setTab("activity")}
           />
         </div>
 

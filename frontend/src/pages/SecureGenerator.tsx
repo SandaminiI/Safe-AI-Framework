@@ -1,4 +1,4 @@
-// Securegenerator.tsx
+// SecureGenerator.tsx
 import { useState } from "react";
 import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
 import { FileSearch, CheckCircle2, MinusCircle, Workflow } from "lucide-react";
@@ -34,7 +34,7 @@ type UmlValidationEntry = {
 };
 
 type UmlValidationMap = Partial<
-  Record<"class" | "package" | "sequence" | "component", UmlValidationEntry>
+  Record<"class" | "package" | "sequence" | "component" | "activity", UmlValidationEntry>
 >;
 
 type UmlReport = {
@@ -49,6 +49,7 @@ type UmlReport = {
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
+  activity_svg?: string | null;    // ← NEW
   validation?: UmlValidationMap;
 };
 
@@ -121,20 +122,46 @@ const sevColor = (sev?: string) => {
   return "#64748b";
 };
 
+/* ---------- Diagram status indicator ---------- */
+type DiagramStatusProps = {
+  label: string;
+  hasSvg: boolean | null | undefined;
+};
+
+function DiagramStatus({ label, hasSvg }: DiagramStatusProps) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      {label}:{" "}
+      {hasSvg ? (
+        <CheckCircle2 size={16} color="#16a34a" />
+      ) : (
+        <MinusCircle size={16} color="#94a3b8" />
+      )}
+      {hasSvg ? "available" : "—"}
+    </span>
+  );
+}
+
 /* ---------- API endpoints ---------- */
-const API = "http://localhost:8000/api/generate";
+const API        = "http://localhost:8000/api/generate";
 const UML_AI_API = "http://localhost:7081/uml/ai";
 
 /* ---------- Component ---------- */
 export default function Securegenerator() {
-  const [prompt, setPrompt] = useState("");
-  const [out, setOut] = useState<ApiResult | null>(null);
+  const [prompt, setPrompt]   = useState("");
+  const [out, setOut]         = useState<ApiResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied]   = useState(false);
 
   // UML modal state
-  const [umlOpen, setUmlOpen] = useState(false);
-  const [umlTab, setUmlTab] = useState<DiagramType>("class");
+  const [umlOpen, setUmlOpen]       = useState(false);
+  const [umlTab, setUmlTab]         = useState<DiagramType>("class");
   const [aiUmlCache, setAiUmlCache] = useState<AiUmlStore>({});
 
   const onGenerate = async () => {
@@ -376,6 +403,7 @@ export default function Securegenerator() {
                       <span>Files analysed for UML: {uml.file_count ?? 0}</span>
                     </div>
 
+                    {/* ← Diagram status grid now includes Activity */}
                     <div
                       style={{
                         display: "flex",
@@ -385,75 +413,15 @@ export default function Securegenerator() {
                         marginTop: 8,
                       }}
                     >
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        Class diagram:{" "}
-                        {uml.class_svg ? (
-                          <CheckCircle2 size={16} color="#16a34a" />
-                        ) : (
-                          <MinusCircle size={16} color="#16a34a" />
-                        )}
-                        {uml.class_svg ? "available" : "—"}
-                      </span>
-
-                      <span style={{ opacity: 0.4 }}></span>
-
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        Package diagram:{" "}
-                        {uml.package_svg ? (
-                          <CheckCircle2 size={16} color="#16a34a" />
-                        ) : (
-                          <MinusCircle size={16} color="#16a34a" />
-                        )}
-                        {uml.package_svg ? "available" : "—"}
-                      </span>
-
-                      <span style={{ opacity: 0.4 }}></span>
-
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        Sequence diagram:{" "}
-                        {uml.sequence_svg ? (
-                          <CheckCircle2 size={16} color="#16a34a" />
-                        ) : (
-                          <MinusCircle size={16} color="#16a34a" />
-                        )}
-                        {uml.sequence_svg ? "available" : "—"}
-                      </span>
-
-                      <span style={{ opacity: 0.4 }}></span>
-
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        Component diagram:{" "}
-                        {uml.component_svg ? (
-                          <CheckCircle2 size={16} color="#16a34a" />
-                        ) : (
-                          <MinusCircle size={16} color="#16a34a" />
-                        )}
-                        {uml.component_svg ? "available" : "—"}
-                      </span>
+                      <DiagramStatus label="Class diagram"     hasSvg={!!uml.class_svg} />
+                      <span style={{ opacity: 0.4 }}>|</span>
+                      <DiagramStatus label="Package diagram"   hasSvg={!!uml.package_svg} />
+                      <span style={{ opacity: 0.4 }}>|</span>
+                      <DiagramStatus label="Sequence diagram"  hasSvg={!!uml.sequence_svg} />
+                      <span style={{ opacity: 0.4 }}>|</span>
+                      <DiagramStatus label="Component diagram" hasSvg={!!uml.component_svg} />
+                      <span style={{ opacity: 0.4 }}>|</span>
+                      <DiagramStatus label="Activity diagram"  hasSvg={!!uml.activity_svg} />
                     </div>
                   </div>
 
@@ -461,13 +429,13 @@ export default function Securegenerator() {
                     onClick={() => {
                       if (!uml) return;
 
-                      const defaultTab: DiagramType = uml.class_svg
-                        ? "class"
-                        : uml.package_svg
-                        ? "package"
-                        : uml.sequence_svg
-                        ? "sequence"
-                        : "component";
+                      // Pick the first available diagram as the default tab
+                      const defaultTab: DiagramType =
+                        uml.class_svg     ? "class"
+                        : uml.package_svg   ? "package"
+                        : uml.sequence_svg  ? "sequence"
+                        : uml.component_svg ? "component"
+                        : "activity";   // ← fallback to activity if others absent
 
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
@@ -549,44 +517,16 @@ export default function Securegenerator() {
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                         <thead>
                           <tr style={{ background: "#f8fafc" }}>
-                            <th
-                              style={{
-                                borderBottom: "2px solid #e2e8f0",
-                                padding: 12,
-                                textAlign: "left",
-                                fontWeight: 600,
-                              }}
-                            >
+                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
                               Severity
                             </th>
-                            <th
-                              style={{
-                                borderBottom: "2px solid #e2e8f0",
-                                padding: 12,
-                                textAlign: "left",
-                                fontWeight: 600,
-                              }}
-                            >
+                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
                               Rule
                             </th>
-                            <th
-                              style={{
-                                borderBottom: "2px solid #e2e8f0",
-                                padding: 12,
-                                textAlign: "left",
-                                fontWeight: 600,
-                              }}
-                            >
+                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
                               Message
                             </th>
-                            <th
-                              style={{
-                                borderBottom: "2px solid #e2e8f0",
-                                padding: 12,
-                                textAlign: "left",
-                                fontWeight: 600,
-                              }}
-                            >
+                            <th style={{ borderBottom: "2px solid #e2e8f0", padding: 12, textAlign: "left", fontWeight: 600 }}>
                               Location
                             </th>
                           </tr>
@@ -598,14 +538,7 @@ export default function Securegenerator() {
                                 {f.severity ?? "INFO"}
                               </td>
                               <td style={{ padding: 12 }}>
-                                <code
-                                  style={{
-                                    fontSize: 11,
-                                    background: "#f1f5f9",
-                                    padding: "2px 6px",
-                                    borderRadius: 4,
-                                  }}
-                                >
+                                <code style={{ fontSize: 11, background: "#f1f5f9", padding: "2px 6px", borderRadius: 4 }}>
                                   {f.check_id}
                                 </code>
                               </td>
