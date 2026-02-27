@@ -485,6 +485,42 @@ async function onStopPlugin() {
     }
   }
 
+  // Create folder function
+  async function createNewFolder() {
+    const name = prompt("Enter folder name:");
+    if (!name) return;
+
+    const fullPath = cwd ? `${cwd}/${name}` : name;
+
+    try {
+      await axios.post(`${API}/core/create-folder`, {
+        path: fullPath,
+      });
+
+      await loadTree(cwd);
+    } catch (err: any) {
+      alert(err?.response?.data?.detail ?? "Failed to create folder");
+    }
+  }
+
+  // create file function
+  async function createNewFile() {
+    const name = prompt("Enter file name:");
+    if (!name) return;
+
+    const fullPath = cwd ? `${cwd}/${name}` : name;
+
+    try {
+      await axios.post(`${API}/core/create-file`, {
+        path: fullPath,
+      });
+
+      await loadTree(cwd);
+    } catch (err: any) {
+      alert(err?.response?.data?.detail ?? "Failed to create file");
+    }
+  }
+
   return (
   <div
     style={{
@@ -608,8 +644,23 @@ async function onStopPlugin() {
           overflowY: "auto",
         }}
       >
-        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 10 }}>
+        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 10, display: "flex" }}>
           EXPLORER
+          <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "left"}}>
+            <button
+              onClick={createNewFolder}
+              style={smallBtn}
+            >
+              📁+
+            </button>
+
+            <button
+              onClick={createNewFile}
+              style={smallBtn}
+            >
+              📄+
+            </button>
+          </div>
         </div>
         {cwd !== "" && (
           <div
@@ -927,6 +978,16 @@ const cardStyle = {
   padding: 14,
   borderRadius: 10,
   marginBottom: 16,
+};
+
+const smallBtn = {
+  padding: "4px 8px",
+  fontSize: 12,
+  borderRadius: 6,
+  border: "none",
+  background: "#2d1f45",
+  color: "#c084fc",
+  cursor: "pointer",
 };
 
 

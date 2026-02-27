@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from plugin_router import router as plugins_router
+from file_router import router as file_router
 
 
 
@@ -743,6 +744,7 @@ def core_reset():
 # ==============================================================================
 
 app.include_router(plugins_router, prefix="/core/plugins", tags=["plugins"])
+app.include_router(file_router)
 
 @app.get("/healthz")
 def healthz():
