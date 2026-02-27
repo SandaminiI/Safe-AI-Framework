@@ -49,7 +49,7 @@ type UmlValidationEntry = {
 };
 
 type UmlValidationMap = Partial<
-  Record<"class" | "package" | "sequence" | "component", UmlValidationEntry>
+  Record<"class" | "package" | "sequence" | "component" | "activity", UmlValidationEntry>
 >;
 
 type UmlReport = {
@@ -61,6 +61,7 @@ type UmlReport = {
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
+  activity_svg?: string | null;
   validation?: UmlValidationMap;
 };
 
@@ -509,6 +510,7 @@ export default function Securegenerator() {
                           { key: "package_svg" as const, label: "Package diagram" },
                           { key: "sequence_svg" as const, label: "Sequence diagram" },
                           { key: "component_svg" as const, label: "Component diagram" },
+                          { key: "activity_svg" as const, label: "Activity diagram" },
                         ]
                       ).map(({ key, label }, idx, arr) => (
                         <span key={key} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -536,7 +538,9 @@ export default function Securegenerator() {
                         ? "package"
                         : uml.sequence_svg
                         ? "sequence"
-                        : "component";
+                        : uml.component_svg
+                        ? "component"
+                        : "activity";
                       setUmlTab(defaultTab);
                       setUmlOpen(true);
                     }}
