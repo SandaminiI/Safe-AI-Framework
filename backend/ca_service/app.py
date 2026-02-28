@@ -149,9 +149,20 @@ def issue_cert(req: IssueCertRequest, request: Request, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/verify-cert", response_model=VerifyCertResponse)
+@app.post("/verify-cert", response_model=VerifyCertResponse, deprecated=True)
 def verify_cert(req: VerifyCertRequest, request: Request, db: Session = Depends(get_db)):
-    """Verify certificate validity against CA"""
+    """
+    [DEPRECATED] Verify certificate validity against CA
+    
+    NOTE: This endpoint is deprecated. Certificate verification should be done 
+    LOCALLY at the Secure Gateway using the CA's public key from /root-ca.
+    
+    The Secure Gateway should:
+    1. Verify certificate signature locally using CA's public key
+    2. Only call /check-revocation/{serial_number} to check revocation status
+    
+    This follows proper PKI architecture where verification is distributed.
+    """
     client_ip = request.client.host if request.client else "unknown"
     
     print(f"\n[CA SERVICE] Certificate Verification Request")
@@ -299,6 +310,38 @@ def revoke_cert(req: RevokeCertRequest, request: Request, db: Session = Depends(
             ip_address=client_ip
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/check-revocation/{serial_number}")
+def check_revocation(serial_number: str, db: Session = Depends(get_db)):
+    """
+    Check if a certificate is revoked.
+    
+    This endpoint is designed to be called by Secure Gateway Station 1
+    after it has verified the certificate locally.
+    
+    Returns:
+    - revoked: bool
+    - reason: str (only if revoked)
+    """
+    revoked = db.query(RevokedCertificate).filter(
+        RevokedCertificate.serial_number == serial_number
+    ).first()
+    
+    if revoked:
+        print(f"[CA SERVICE] Revocation check: {serial_number} - REVOKED")
+        return {
+            "serial_number": serial_number,
+            "revoked": True,
+            "reason": revoked.reason,
+            "revoked_at": revoked.revoked_at.isoformat() if revoked.revoked_at else None
+        }
+    
+    print(f"[CA SERVICE] Revocation check: {serial_number} - Not revoked")
+    return {
+        "serial_number": serial_number,
+        "revoked": False
+    }
 
 
 # ============================================================================
