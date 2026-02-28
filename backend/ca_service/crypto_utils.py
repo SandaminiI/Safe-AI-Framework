@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict, Any, Optional
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -91,7 +92,7 @@ def issue_plugin_cert(
     root_cert_pem: str,
     plugin_id: str,
     ttl_hours: int = 3,
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, str]:
     root_key = serialization.load_pem_private_key(root_key_pem.encode("utf-8"), password=None)
     root_cert = x509.load_pem_x509_certificate(root_cert_pem.encode("utf-8"))
 
@@ -107,12 +108,14 @@ def issue_plugin_cert(
     now = datetime.now(UTC)
     expires = now + timedelta(hours=ttl_hours)
 
+    serial = x509.random_serial_number()
+
     plugin_cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(root_cert.subject)
         .public_key(plugin_key.public_key())
-        .serial_number(x509.random_serial_number())
+        .serial_number(serial)
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(expires)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
@@ -143,4 +146,110 @@ def issue_plugin_cert(
 
     plugin_cert_pem = plugin_cert.public_bytes(serialization.Encoding.PEM).decode("utf-8")
 
-    return plugin_key_pem, plugin_cert_pem, expires.isoformat()
+    return plugin_key_pem, plugin_cert_pem, expires.isoformat(), str(serial)
+
+
+def verify_certificate(
+    cert_pem: str,
+    root_ca_cert_pem: str,
+    expected_plugin_id: Optional[str] = None
+) -> Tuple[bool, Any]:
+    """
+    Verify a certificate against the root CA.
+    Returns (True, details_dict) on success or (False, error_message) on failure.
+    """
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
+        root_ca_cert = x509.load_pem_x509_certificate(root_ca_cert_pem.encode("utf-8"))
+        
+        # Extract plugin_id from CN
+        cn_attr = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        if not cn_attr:
+            return False, "Certificate missing CN"
+        
+        plugin_id = cn_attr[0].value
+        
+        # Check if plugin_id matches expected (if provided)
+        if expected_plugin_id and plugin_id != expected_plugin_id:
+            return False, f"Plugin ID mismatch: expected {expected_plugin_id}, got {plugin_id}"
+        
+        # Check expiration
+        now = datetime.now(UTC)
+        if now < cert.not_valid_before.replace(tzinfo=UTC):
+            return False, "Certificate not yet valid"
+        if now > cert.not_valid_after.replace(tzinfo=UTC):
+            return False, "Certificate expired"
+        
+        # Check issuer matches root CA subject
+        if cert.issuer != root_ca_cert.subject:
+            return False, "Certificate issuer mismatch"
+        
+        # Verify signature
+        try:
+            from cryptography.hazmat.primitives.asymmetric import padding
+            root_ca_cert.public_key().verify(
+                cert.signature,
+                cert.tbs_certificate_bytes,
+                padding.PKCS1v15(),
+                cert.signature_hash_algorithm,
+            )
+        except Exception as e:
+            return False, f"Signature verification failed: {str(e)}"
+        
+        # Check if revoked (this would be called separately in app.py)
+        serial_number = str(cert.serial_number)
+        
+        return True, {
+            "plugin_id": plugin_id,
+            "serial_number": serial_number,
+            "expires_at": cert.not_valid_after.isoformat()
+        }
+    
+    except Exception as e:
+        return False, f"Certificate verification error: {str(e)}"
+
+
+def is_certificate_revoked(serial_number: str, crl_path: Path) -> bool:
+    """Check if a certificate is in the CRL"""
+    if not crl_path.exists():
+        return False
+    
+    try:
+        with open(crl_path, "r") as f:
+            crl = json.load(f)
+        
+        return any(entry["serial_number"] == serial_number for entry in crl)
+    except Exception:
+        return False
+
+
+def revoke_certificate_in_crl(serial_number: str, crl_path: Path, reason: str = "unspecified") -> Tuple[bool, str]:
+    """Add a certificate to the CRL"""
+    try:
+        # Load existing CRL
+        if crl_path.exists():
+            with open(crl_path, "r") as f:
+                crl = json.load(f)
+        else:
+            crl = []
+        
+        # Check if already revoked
+        if any(entry["serial_number"] == serial_number for entry in crl):
+            return False, "Certificate already revoked"
+        
+        # Add to CRL
+        crl.append({
+            "serial_number": serial_number,
+            "revoked_at": datetime.now(UTC).isoformat(),
+            "reason": reason
+        })
+        
+        # Save CRL
+        crl_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(crl_path, "w") as f:
+            json.dump(crl, f, indent=2)
+        
+        return True, "Certificate revoked successfully"
+    
+    except Exception as e:
+        return False, f"Failed to revoke certificate: {str(e)}"

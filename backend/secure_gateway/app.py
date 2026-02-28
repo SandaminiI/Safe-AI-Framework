@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request, Body
@@ -18,10 +18,12 @@ from config import (
 )
 from database import engine, get_db, SessionLocal
 from models import Base, Plugin, RequestLog
-from auth import save_root_ca_cert, load_root_ca_cert, verify_plugin_cert, issue_jwt, verify_jwt_token
+from auth import save_root_ca_cert, load_root_ca_cert, verify_plugin_cert, issue_jwt, verify_jwt_token, verify_jwt_with_intent
 from trust_engine import update_plugin_trust
 from policy_engine import is_allowed
 from fastapi.middleware.cors import CORSMiddleware
+from station1_cert_verification import station1
+from station2_access_control import station2
 
 app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="1.0")
 
@@ -137,6 +139,272 @@ def onboard(req: OnboardRequest, db: Session = Depends(get_db)):
     )
 
 
+# ============================================================================
+# TWO-STATION ARCHITECTURE ENDPOINTS
+# ============================================================================
+
+class Station1Request(BaseModel):
+    plugin_id: str = Field(..., min_length=3, max_length=120)
+    certificate_pem: str
+    intent: str = Field(default="read", pattern="^(read|write|execute)$")
+    scope: str = Field(default="public", pattern="^(public|protected|private)$")
+
+
+class Station1Response(BaseModel):
+    success: bool
+    jwt_token: Optional[str] = None
+    trust_score: Optional[float] = None
+    expires_in: Optional[int] = None
+    next_station: Optional[str] = None
+    error: Optional[str] = None
+    redirect_to_ca: bool = False
+
+
+@app.post("/station1/verify-and-issue", response_model=Station1Response)
+async def station1_verify_and_issue(req: Station1Request, db: Session = Depends(get_db)):
+    """
+    Station 1: Certificate Verification & JWT Issuance
+    
+    Flow:
+    1. Plugin provides certificate and declares intent/scope
+    2. Verify certificate with CA Service
+    3. Calculate trust score based on history
+    4. Issue JWT with intent-bound claims
+    """
+    print(f"\n{'='*80}")
+    print(f"[STATION 1] Certificate Verification Request")
+    print(f"[STATION 1] Plugin ID: {req.plugin_id}")
+    print(f"[STATION 1] Intent: {req.intent}")
+    print(f"[STATION 1] Scope: {req.scope}")
+    print(f"{'='*80}\n")
+    
+    if not req.certificate_pem:
+        print(f"[STATION 1] ✗ No certificate provided - redirecting to CA\n")
+        return Station1Response(
+            success=False,
+            error="Certificate required. Please obtain certificate from CA first.",
+            redirect_to_ca=True
+        )
+    
+    # Process certificate and issue JWT
+    success, result, error = await station1.async_process_certificate_and_issue_jwt(
+        plugin_id=req.plugin_id,
+        certificate_pem=req.certificate_pem,
+        intent=req.intent,
+        scope=req.scope,
+        db=db
+    )
+    
+    if not success:
+        print(f"[STATION 1] ✗ Certificate verification failed: {error}\n")
+        return Station1Response(
+            success=False,
+            error=error,
+            redirect_to_ca="Certificate verification failed" in error
+        )
+    
+    print(f"[STATION 1] ✓ Certificate verified successfully")
+    print(f"[STATION 1] ✓ JWT issued with intent-bound claims")
+    print(f"[STATION 1] Trust Score: {result.get('trust_score')}")
+    print(f"[STATION 1] Plugin should now proceed to Station 2\n")
+    
+    return Station1Response(
+        success=True,
+        jwt_token=result.get("jwt_token"),
+        trust_score=result.get("trust_score"),
+        expires_in=result.get("expires_in"),
+        next_station="/station2/validate-access"
+    )
+
+
+class Station2Request(BaseModel):
+    method: str = Field(default="GET")
+    path: str = Field(default="/core/")
+
+
+class Station2Response(BaseModel):
+    access_granted: bool
+    context: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+@app.post("/station2/validate-access", response_model=Station2Response)
+def station2_validate_access(req: Station2Request, request: Request, db: Session = Depends(get_db)):
+    """
+    Station 2: JWT Validation & Core Access Control
+    
+    Flow:
+    1. Plugin provides JWT from Station 1
+    2. Validate JWT signature and claims
+    3. Check trust score against scope requirements
+    4. Check intent permissions for requested method
+    5. Grant or deny core access
+    """
+    print(f"\n{'='*80}")
+    print(f"[STATION 2] Access Validation Request")
+    print(f"[STATION 2] Method: {req.method}")
+    print(f"[STATION 2] Path: {req.path}")
+    print(f"{'='*80}\n")
+    
+    # Extract JWT from Authorization header
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        print(f"[STATION 2] ✗ No Authorization header provided\n")
+        return Station2Response(
+            access_granted=False,
+            error="Missing or invalid Authorization header. Expected: Bearer <jwt_token>"
+        )
+    
+    jwt_token = auth_header.split(" ", 1)[1].strip()
+    
+    # Validate JWT and check access policy
+    access_granted, context, error = station2.validate_jwt_and_check_access(
+        jwt_token=jwt_token,
+        requested_method=req.method,
+        requested_path=req.path,
+        db=db
+    )
+    
+    if not access_granted:
+        print(f"[STATION 2] ✗ Access DENIED: {error}\n")
+        return Station2Response(
+            access_granted=False,
+            error=error
+        )
+    
+    print(f"[STATION 2] ✓ JWT validated successfully")
+    print(f"[STATION 2] ✓ Access GRANTED to core communication")
+    print(f"[STATION 2] Plugin ID: {context.get('plugin_id')}")
+    print(f"[STATION 2] Trust Score: {context.get('trust_score')}")
+    print(f"[STATION 2] Intent: {context.get('intent')}")
+    print(f"[STATION 2] Scope: {context.get('scope')}\n")
+    
+    return Station2Response(
+        access_granted=True,
+        context=context
+    )
+
+
+@app.get("/station1/health")
+def station1_health():
+    """Health check for Station 1"""
+    return {"status": "healthy", "station": "1", "service": "certificate_verification"}
+
+
+@app.get("/station2/health")
+def station2_health():
+    """Health check for Station 2"""
+    return {"status": "healthy", "station": "2", "service": "access_control"}
+
+
+@app.post("/auto-enroll")
+async def auto_enroll_plugin(
+    plugin_id: str,
+    intent: str = "execute",
+    scope: str = "public",
+    db: Session = Depends(get_db)
+):
+    """
+    Automatic enrollment endpoint for testing.
+    Simulates the complete flow: CA -> Station 1 -> Station 2
+    
+    In production, plugins should go through each station manually.
+    This is for demonstration and testing purposes.
+    """
+    try:
+        # Step 1: Request certificate from CA Service
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ca_response = await client.post(
+                f"{CA_SERVICE_URL}/issue-cert",
+                json={
+                    "plugin_id": plugin_id,
+                    "ttl_hours": 24
+                }
+            )
+            
+            if ca_response.status_code != 200:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"CA Service error: {ca_response.text}"
+                )
+            
+            ca_data = ca_response.json()
+            certificate_pem = ca_data.get("certificate_pem")
+            
+            print(f"[AUTO-ENROLL] Step 1 Complete: Certificate issued for {plugin_id}")
+        
+        # Step 2: Go to Station 1 with certificate
+        success, result, error = await station1.async_process_certificate_and_issue_jwt(
+            plugin_id=plugin_id,
+            certificate_pem=certificate_pem,
+            intent=intent,
+            scope=scope,
+            db=db
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Station 1 error: {error}"
+            )
+        
+        jwt_token = result.get("jwt_token")
+        trust_score = result.get("trust_score")
+        
+        print(f"[AUTO-ENROLL] Step 2 Complete: JWT issued for {plugin_id}")
+        
+        # Step 3: Validate JWT at Station 2
+        access_granted, context, error = station2.validate_jwt_and_check_access(
+            jwt_token=jwt_token,
+            requested_method="POST",
+            requested_path="/core/plugins/run",
+            db=db
+        )
+        
+        if not access_granted:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Station 2 error: {error}"
+            )
+        
+        print(f"[AUTO-ENROLL] Step 3 Complete: JWT validated at Station 2 for {plugin_id}")
+        
+        return {
+            "success": True,
+            "message": "Plugin enrolled successfully through two-station flow",
+            "plugin_id": plugin_id,
+            "jwt_token": jwt_token,
+            "trust_score": trust_score,
+            "flow_completed": [
+                "✓ Step 1: Certificate obtained from CA Service",
+                "✓ Step 2: JWT issued by Station 1 (certificate verified)",
+                "✓ Step 3: JWT validated by Station 2 (access granted)"
+            ],
+            "usage": f"Use this JWT in Authorization header: Bearer {jwt_token}",
+            "example_request": {
+                "method": "POST",
+                "url": "/core/plugins/run",
+                "headers": {
+                    "Authorization": f"Bearer {jwt_token}",
+                    "Content-Type": "application/json"
+                }
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Auto-enrollment failed: {str(e)}"
+        )
+
+
+# ============================================================================
+# END TWO-STATION ARCHITECTURE
+# ============================================================================
+
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     path = request.url.path
@@ -144,26 +412,108 @@ async def security_middleware(request: Request, call_next):
     if path.startswith("/docs") or path.startswith("/openapi"):
         return await call_next(request)
 
+    # Allow station endpoints, onboard, and auto-enroll endpoints
+    if path.startswith("/station1/") or path.startswith("/station2/") or path.startswith("/onboard") or path.startswith("/auto-enroll"):
+        return await call_next(request)
+
+    # Determine if authentication is needed
     needs_auth = False
     if path.startswith("/plugins/"):
         needs_auth = True
     elif path.startswith("/core/"):
+        # Check if this is a request with Authorization header (plugin request)
+        # or a frontend request (no Authorization header)
         if STRICT_CORE_AUTH:
             needs_auth = True
         else:
+            # Only require auth if Authorization header is present
+            # This maintains backward compatibility with frontend while still
+            # validating plugin requests that provide JWT
             needs_auth = request.headers.get("Authorization", "").startswith("Bearer ")
 
     plugin = None
     if needs_auth:
         db = SessionLocal()
         try:
-            plugin = _get_plugin_from_token(request, db)
-            if not plugin:
-                raise HTTPException(status_code=401, detail="Missing/invalid JWT")
-
-            allowed, reason = is_allowed(plugin, path, request.method)
-            if not allowed:
-                raise HTTPException(status_code=403, detail=reason)
+            # Check for Authorization header
+            auth_header = request.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer "):
+                # For /plugins/ path, require auth
+                if path.startswith("/plugins/"):
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": "No authentication token provided",
+                            "flow": "two_station_required",
+                            "steps": [
+                                {"step": 1, "action": "Get certificate from CA Service", "endpoint": f"{CA_SERVICE_URL}/issue-cert"},
+                                {"step": 2, "action": "Verify certificate and get JWT from Station 1", "endpoint": "/station1/verify-and-issue"},
+                                {"step": 3, "action": "Validate JWT at Station 2", "endpoint": "/station2/validate-access"},
+                                {"step": 4, "action": "Use validated JWT to access core", "endpoint": path}
+                            ],
+                            "message": "Please complete the two-station authentication flow before accessing core resources"
+                        }
+                    )
+                # For /core/ paths without auth header, allow through (frontend)
+                else:
+                    return await call_next(request)
+            
+            token = auth_header.split(" ", 1)[1].strip()
+            
+            # Try to validate with intent-bound JWT (two-station flow)
+            try:
+                payload = verify_jwt_with_intent(token)
+                
+                # Validate access through Station 2
+                method = request.method
+                access_granted, context, error = station2.validate_jwt_and_check_access(
+                    jwt_token=token,
+                    requested_method=method,
+                    requested_path=path,
+                    db=db
+                )
+                
+                if not access_granted:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": error,
+                            "flow": "station2_validation_failed",
+                            "message": "JWT validation failed at Station 2. You may need to re-authenticate.",
+                            "next_step": "Go to Station 1 to get a new JWT with proper intent/scope"
+                        }
+                    )
+                
+                # Extract plugin from validated JWT
+                plugin_id = payload.get("sub")
+                plugin = db.get(Plugin, plugin_id)
+                if not plugin:
+                    raise HTTPException(status_code=401, detail="Plugin not found in database")
+                
+                print(f"[MIDDLEWARE] ✓ Plugin {plugin_id} authenticated via two-station flow")
+                    
+            except ValueError as e:
+                # Try legacy JWT validation for backward compatibility
+                try:
+                    plugin = _get_plugin_from_token(request, db)
+                    if not plugin:
+                        raise HTTPException(status_code=401, detail="Missing/invalid JWT")
+                    
+                    allowed, reason = is_allowed(plugin, path, request.method)
+                    if not allowed:
+                        raise HTTPException(status_code=403, detail=reason)
+                    
+                    print(f"[MIDDLEWARE] Plugin {plugin.plugin_id} authenticated via legacy JWT")
+                except:
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error": str(e),
+                            "flow": "jwt_invalid",
+                            "message": "JWT token is invalid or expired",
+                            "next_step": "Get a new JWT from Station 1 (provide certificate if needed)"
+                        }
+                    )
         finally:
             db.close()
 
@@ -238,12 +588,160 @@ def _ensure_plugin_row(db: Session, slug: str):
     return plugin
 
 
+# Store plugin JWT tokens in memory for session management
+_plugin_jwt_cache: dict = {}
+
+
+async def _ensure_plugin_authenticated(slug: str, db: Session) -> tuple:
+    """
+    Ensure plugin goes through the two-station authentication flow.
+    Returns: (success, jwt_token, error_message)
+    
+    Flow:
+    1. Check if plugin already has a valid JWT in cache
+    2. If not, get certificate from CA Service
+    3. Go to Station 1 to get JWT
+    4. Validate JWT at Station 2
+    5. Cache the JWT for future requests
+    """
+    global _plugin_jwt_cache
+    
+    # Check if plugin has a cached valid JWT
+    if slug in _plugin_jwt_cache:
+        cached = _plugin_jwt_cache[slug]
+        try:
+            # Verify JWT is still valid
+            payload = verify_jwt_with_intent(cached["jwt_token"])
+            # Check if not expired (with 5 minute buffer)
+            import datetime
+            if payload.get("exp", 0) > datetime.datetime.now(datetime.timezone.utc).timestamp() + 300:
+                print(f"[AUTH] Plugin {slug} using cached JWT")
+                return True, cached["jwt_token"], None
+        except:
+            # JWT expired or invalid, remove from cache
+            del _plugin_jwt_cache[slug]
+    
+    print(f"\n{'='*80}")
+    print(f"[SECURE GATEWAY] New Plugin Detected: {slug}")
+    print(f"[SECURE GATEWAY] Starting Two-Station Authentication Flow...")
+    print(f"{'='*80}\n")
+    
+    try:
+        # ================================================================
+        # STEP 1: Get certificate from CA Service
+        # ================================================================
+        print(f"[FLOW] Step 1: Requesting certificate from CA Service for plugin '{slug}'...")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ca_response = await client.post(
+                f"{CA_SERVICE_URL}/issue-cert",
+                json={
+                    "plugin_id": slug,
+                    "ttl_hours": 24
+                }
+            )
+            
+            if ca_response.status_code != 200:
+                error_msg = f"CA Service error: {ca_response.text}"
+                print(f"[FLOW] ✗ Step 1 FAILED: {error_msg}")
+                return False, None, error_msg
+            
+            ca_data = ca_response.json()
+            certificate_pem = ca_data.get("certificate_pem")
+            serial_number = ca_data.get("serial_number")
+            
+            print(f"[FLOW] ✓ Step 1 Complete: Certificate issued")
+            print(f"[FLOW]   Serial: {serial_number}")
+        
+        # ================================================================
+        # STEP 2: Go to Station 1 with certificate to get JWT
+        # ================================================================
+        print(f"[FLOW] Step 2: Station 1 - Verifying certificate and issuing JWT...")
+        
+        success, result, error = await station1.async_process_certificate_and_issue_jwt(
+            plugin_id=slug,
+            certificate_pem=certificate_pem,
+            intent="execute",  # Plugin containers need execute permission
+            scope="public",
+            db=db
+        )
+        
+        if not success:
+            print(f"[FLOW] ✗ Step 2 FAILED: {error}")
+            return False, None, f"Station 1 error: {error}"
+        
+        jwt_token = result.get("jwt_token")
+        trust_score = result.get("trust_score")
+        
+        print(f"[FLOW] ✓ Step 2 Complete: JWT issued")
+        print(f"[FLOW]   Trust Score: {trust_score}")
+        
+        # ================================================================
+        # STEP 3: Validate JWT at Station 2
+        # ================================================================
+        print(f"[FLOW] Step 3: Station 2 - Validating JWT for core access...")
+        
+        access_granted, context, error = station2.validate_jwt_and_check_access(
+            jwt_token=jwt_token,
+            requested_method="POST",
+            requested_path="/core/plugins/run",
+            db=db
+        )
+        
+        if not access_granted:
+            print(f"[FLOW] ✗ Step 3 FAILED: {error}")
+            return False, None, f"Station 2 error: {error}"
+        
+        print(f"[FLOW] ✓ Step 3 Complete: Access granted to core communication")
+        print(f"[FLOW]   Plugin ID: {context.get('plugin_id')}")
+        print(f"[FLOW]   Intent: {context.get('intent')}")
+        print(f"[FLOW]   Scope: {context.get('scope')}")
+        
+        # ================================================================
+        # STEP 4: Cache JWT for future requests
+        # ================================================================
+        _plugin_jwt_cache[slug] = {
+            "jwt_token": jwt_token,
+            "trust_score": trust_score,
+            "certificate_serial": serial_number
+        }
+        
+        print(f"\n{'='*80}")
+        print(f"[SECURE GATEWAY] ✓ Two-Station Flow Complete for plugin '{slug}'")
+        print(f"[SECURE GATEWAY] Plugin can now communicate with core system")
+        print(f"{'='*80}\n")
+        
+        return True, jwt_token, None
+        
+    except Exception as e:
+        print(f"[FLOW] ✗ Authentication flow error: {str(e)}")
+        return False, None, str(e)
+
+
 @app.post("/core/plugins/start")
 async def proxy_plugins_start(request: Request, db: Session = Depends(get_db)):
+    """
+    Proxy to core system for plugin start.
+    ENFORCES TWO-STATION FLOW: CA -> Station 1 -> Station 2 -> Core
+    """
     payload = await request.json()
     slug = payload.get("slug", "unknown")
 
     _ensure_plugin_row(db, slug)
+    
+    # ================================================================
+    # ENFORCE TWO-STATION AUTHENTICATION FLOW
+    # ================================================================
+    success, jwt_token, error = await _ensure_plugin_authenticated(slug, db)
+    if not success:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": error,
+                "message": "Plugin failed two-station authentication flow",
+                "plugin_id": slug
+            }
+        )
 
     start = time.perf_counter()
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/start")
@@ -265,14 +763,32 @@ async def proxy_plugins_start(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/core/plugins/run")
 async def proxy_plugins_run(request: Request, db: Session = Depends(get_db)):
+    """
+    Proxy to core system for plugin run.
+    ENFORCES TWO-STATION FLOW: CA -> Station 1 -> Station 2 -> Core
+    """
     payload = await request.json()
     slug = payload.get("slug", "unknown")
 
     plugin = _ensure_plugin_row(db, slug)
 
-    # Optional enforcement (only if you want):
+    # Enforce trust policy
     if plugin.status == "blocked":
         raise HTTPException(status_code=403, detail="Plugin blocked by trust policy")
+    
+    # ================================================================
+    # ENFORCE TWO-STATION AUTHENTICATION FLOW
+    # ================================================================
+    success, jwt_token, error = await _ensure_plugin_authenticated(slug, db)
+    if not success:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": error,
+                "message": "Plugin failed two-station authentication flow",
+                "plugin_id": slug
+            }
+        )
 
     start = time.perf_counter()
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/run")
@@ -294,10 +810,28 @@ async def proxy_plugins_run(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/core/plugins/stop")
 async def proxy_plugins_stop(request: Request, db: Session = Depends(get_db)):
+    """
+    Proxy to core system for plugin stop.
+    ENFORCES TWO-STATION FLOW: CA -> Station 1 -> Station 2 -> Core
+    """
     payload = await request.json()
     slug = payload.get("slug", "unknown")
 
     _ensure_plugin_row(db, slug)
+    
+    # ================================================================
+    # ENFORCE TWO-STATION AUTHENTICATION FLOW
+    # ================================================================
+    success, jwt_token, error = await _ensure_plugin_authenticated(slug, db)
+    if not success:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": error,
+                "message": "Plugin failed two-station authentication flow",
+                "plugin_id": slug
+            }
+        )
 
     start = time.perf_counter()
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/stop")

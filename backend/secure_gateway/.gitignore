@@ -38,3 +38,6 @@ Thumbs.db
 
 # Cached Root CA cert (downloaded at runtime)
 root_ca_cert.pem
+
+
+gateway.db
