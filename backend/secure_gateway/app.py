@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional, Dict, Any
 
@@ -19,14 +20,17 @@ from config import (
 from database import engine, get_db, SessionLocal
 from models import Base, Plugin, RequestLog
 from auth import save_root_ca_cert, load_root_ca_cert, verify_plugin_cert, issue_jwt, verify_jwt_token, verify_jwt_with_intent
-from trust_engine import update_plugin_trust
-from policy_engine import is_allowed
+from trust_engine import update_plugin_trust, evaluate_behavior
+from policy_engine import is_allowed, evaluate as policy_evaluate, Decision
 from fastapi.middleware.cors import CORSMiddleware
 from station1_cert_verification import station1
 from station2_access_control import station2
 import color_logger as clog
 
-app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="1.0")
+# Configure module-level logging so trust/policy engines output to console
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -534,7 +538,19 @@ async def security_middleware(request: Request, call_next):
                     )
                 )
                 db.commit()
-                update_plugin_trust(db, plugin.plugin_id)
+
+                # ── Zero-Trust: evaluate behaviour with full context ──
+                # Normal valid requests will NOT reduce trust.
+                # Only anomalies / violations trigger penalties.
+                evaluate_behavior(db, plugin.plugin_id, path, {
+                    "method": request.method,
+                    "status_code": status_code,
+                    "latency_ms": latency_ms,
+                    "error_flag": error_flag,
+                    "cert_valid": True,       # cert already verified at station 1
+                    "auth_failed": False,     # auth succeeded to reach here
+                    "policy_violation": False, # policy was not violated
+                })
             finally:
                 db.close()
 
@@ -729,17 +745,27 @@ async def proxy_plugins_start(request: Request, db: Session = Depends(get_db)):
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/start")
     latency_ms = (time.perf_counter() - start) * 1000.0
 
+    error_flag = resp.status_code >= 400
     db.add(RequestLog(
         plugin_id=slug,
         path="/core/plugins/start",
         method="POST",
         status_code=resp.status_code,
         latency_ms=latency_ms,
-        error_flag=resp.status_code >= 400,
+        error_flag=error_flag,
     ))
     db.commit()
 
-    update_plugin_trust(db, slug)
+    # Zero-Trust: evaluate behaviour — normal requests will NOT reduce trust
+    evaluate_behavior(db, slug, "/core/plugins/start", {
+        "method": "POST",
+        "status_code": resp.status_code,
+        "latency_ms": latency_ms,
+        "error_flag": error_flag,
+        "cert_valid": True,
+        "auth_failed": False,
+        "policy_violation": False,
+    })
     return resp
 
 
@@ -754,10 +780,29 @@ async def proxy_plugins_run(request: Request, db: Session = Depends(get_db)):
 
     plugin = _ensure_plugin_row(db, slug)
 
-    # Enforce trust policy
-    if plugin.status == "blocked":
-        raise HTTPException(status_code=403, detail="Plugin blocked by trust policy")
-    
+    # ── Policy Engine: evaluate access before proxying ──────────────
+    policy_result = policy_evaluate(
+        plugin, "/core/plugins/run", "POST",
+        cert_valid=True,
+        anomaly_flag=plugin.anomaly_flag,
+    )
+    if policy_result.decision in (Decision.TEMPORARY_BLOCK, Decision.HARD_BLOCK):
+        # Record the policy violation in the trust engine
+        evaluate_behavior(db, slug, "/core/plugins/run", {
+            "method": "POST", "status_code": 403, "latency_ms": 0,
+            "error_flag": True, "cert_valid": True,
+            "auth_failed": False, "policy_violation": True,
+        })
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": policy_result.reason,
+                "decision": policy_result.decision.value,
+                "trust_score": policy_result.trust_score,
+                "risk_level": policy_result.risk_level.value,
+            }
+        )
+
     # ================================================================
     # ENFORCE TWO-STATION AUTHENTICATION FLOW
     # ================================================================
@@ -776,17 +821,27 @@ async def proxy_plugins_run(request: Request, db: Session = Depends(get_db)):
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/run")
     latency_ms = (time.perf_counter() - start) * 1000.0
 
+    error_flag = resp.status_code >= 400
     db.add(RequestLog(
         plugin_id=slug,
         path="/core/plugins/run",
         method="POST",
         status_code=resp.status_code,
         latency_ms=latency_ms,
-        error_flag=resp.status_code >= 400,
+        error_flag=error_flag,
     ))
     db.commit()
 
-    update_plugin_trust(db, slug)
+    # Zero-Trust: evaluate behaviour — normal requests will NOT reduce trust
+    evaluate_behavior(db, slug, "/core/plugins/run", {
+        "method": "POST",
+        "status_code": resp.status_code,
+        "latency_ms": latency_ms,
+        "error_flag": error_flag,
+        "cert_valid": True,
+        "auth_failed": False,
+        "policy_violation": False,
+    })
     return resp
 
 
@@ -819,17 +874,27 @@ async def proxy_plugins_stop(request: Request, db: Session = Depends(get_db)):
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/stop")
     latency_ms = (time.perf_counter() - start) * 1000.0
 
+    error_flag = resp.status_code >= 400
     db.add(RequestLog(
         plugin_id=slug,
         path="/core/plugins/stop",
         method="POST",
         status_code=resp.status_code,
         latency_ms=latency_ms,
-        error_flag=resp.status_code >= 400,
+        error_flag=error_flag,
     ))
     db.commit()
 
-    update_plugin_trust(db, slug)
+    # Zero-Trust: evaluate behaviour — normal requests will NOT reduce trust
+    evaluate_behavior(db, slug, "/core/plugins/stop", {
+        "method": "POST",
+        "status_code": resp.status_code,
+        "latency_ms": latency_ms,
+        "error_flag": error_flag,
+        "cert_valid": True,
+        "auth_failed": False,
+        "policy_violation": False,
+    })
     return resp
 
 

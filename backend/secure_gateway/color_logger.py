@@ -237,3 +237,70 @@ def log_middleware_auth(plugin_id, flow_type="two-station"):
 def log_middleware_legacy(plugin_id):
     """Log middleware legacy authentication"""
     print(f"[MIDDLEWARE] {ColorLogger.WARNING}⚠{ColorLogger.RESET} Plugin {plugin_id} authenticated via legacy JWT")
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
+#  Trust Engine logging                                                        #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+TRUST_COLOR = Fore.MAGENTA
+
+
+def log_trust_evaluation(plugin_id, score_before, score_after, delta, status, anomaly, reasons):
+    """Log a complete trust evaluation result"""
+    arrow = "→"
+    prefix = f"{TRUST_COLOR}[TRUST]{ColorLogger.RESET}"
+    if delta < 0:
+        delta_str = f"{ColorLogger.ERROR}{delta:+.1f}{ColorLogger.RESET}"
+    elif delta > 0:
+        delta_str = f"{ColorLogger.SUCCESS}{delta:+.1f}{ColorLogger.RESET}"
+    else:
+        delta_str = f"{delta:+.1f}"
+    print(
+        f"{prefix} plugin={plugin_id} score={score_before:.1f}{arrow}{score_after:.1f} "
+        f"delta={delta_str} status={status} anomaly={anomaly}"
+    )
+    if reasons:
+        for r in reasons:
+            print(f"{prefix}   • {r}")
+
+
+def log_trust_recovery(plugin_id, amount, new_score):
+    """Log passive trust recovery"""
+    print(
+        f"{TRUST_COLOR}[TRUST]{ColorLogger.RESET} "
+        f"{ColorLogger.SUCCESS}↑{ColorLogger.RESET} "
+        f"plugin={plugin_id} recovered +{amount:.1f} → {new_score:.1f}"
+    )
+
+
+def log_trust_anomaly_cleared(plugin_id):
+    """Log anomaly flag cleared"""
+    print(
+        f"{TRUST_COLOR}[TRUST]{ColorLogger.RESET} "
+        f"{ColorLogger.SUCCESS}✓{ColorLogger.RESET} "
+        f"plugin={plugin_id} anomaly flag cleared"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
+#  Policy Engine logging                                                       #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+POLICY_COLOR = Fore.YELLOW
+
+
+def log_policy_decision(plugin_id, decision, risk_level, score, path, method, reason):
+    """Log a policy decision"""
+    prefix = f"{POLICY_COLOR}[POLICY]{ColorLogger.RESET}"
+    if decision in ("ALLOW",):
+        dec_str = f"{ColorLogger.SUCCESS}{decision}{ColorLogger.RESET}"
+    elif decision in ("RATE_LIMIT",):
+        dec_str = f"{ColorLogger.WARNING}{decision}{ColorLogger.RESET}"
+    else:
+        dec_str = f"{ColorLogger.ERROR}{decision}{ColorLogger.RESET}"
+    print(
+        f"{prefix} plugin={plugin_id} decision={dec_str} risk={risk_level} "
+        f"score={score:.1f} {method} {path}"
+    )
+    print(f"{prefix}   reason: {reason}")
