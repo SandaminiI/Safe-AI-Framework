@@ -15,7 +15,7 @@ from uml_validate import validate_plantuml
 
 UML_RENDER_URL = "http://127.0.0.1:7090/render/svg"
 
-app = FastAPI(title="AI UML Generator (Gemini + PlantUML)", version="0.2.0")
+app = FastAPI(title="AI UML Generator (Gemini + PlantUML)", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,7 +31,7 @@ app.add_middleware(
 
 
 class UMLAIRequest(BaseModel):
-    diagram_type: Literal["class", "package", "sequence", "component"] = "class"
+    diagram_type: Literal["class", "package", "sequence", "component", "activity"] = "class"
     # Either send CIR (preferred) OR raw code (fallback)
     cir: Optional[Dict[str, Any]] = None
     code: Optional[str] = None
