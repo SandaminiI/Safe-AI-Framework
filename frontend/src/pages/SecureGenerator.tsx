@@ -1,9 +1,12 @@
-// Securegenerator.tsx
+// Securegenerator.tsx 
 import { useState } from "react";
 import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
-import { FileSearch, CheckCircle2, MinusCircle, Workflow } from "lucide-react";
+import { 
+  FileSearch, CheckCircle2, MinusCircle, Workflow, Shield, Sparkles, 
+  Copy, Check, Code2, ChevronDown, Zap, BarChart3, Clock, Settings, ArrowLeft 
+} from "lucide-react";
 
-/* ---------- Types ---------- */
+/* ---------- Types (unchanged) ---------- */
 type Finding = {
   check_id?: string;
   severity?: string;
@@ -42,7 +45,6 @@ type LlmFixReport = {
   reason?: string;
 };
 
-/* ---------- UML Types (her additions) ---------- */
 type UmlValidationEntry = {
   ok: boolean;
   errors: string[];
@@ -92,74 +94,6 @@ type ApiResult = {
 const API = "http://localhost:8000/api/generate";
 const UML_AI_API = "http://localhost:7081/uml/ai";
 
-/* ---------- Styled Components ---------- */
-const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
-  <div style={{ marginTop: 24 }}>
-    <h2 style={{ margin: "0 0 12px 0", fontSize: 18, fontWeight: 600, color: "#1e293b" }}>
-      {title}
-    </h2>
-    <div
-      style={{
-        background: "#ffffff",
-        padding: 20,
-        borderRadius: 8,
-        border: "1px solid #e2e8f0",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-      }}
-    >
-      {children}
-    </div>
-  </div>
-);
-
-const StatCard = ({ label, value, color }: { label: string; value: number; color: string }) => (
-  <div
-    style={{
-      padding: 16,
-      background: "#f8fafc",
-      borderRadius: 8,
-      border: "1px solid #e2e8f0",
-    }}
-  >
-    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>{label}</div>
-    <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
-  </div>
-);
-
-const ProgressBar = ({ current, total }: { current: number; total: number }) => {
-  const percentage = total > 0 ? (current / total) * 100 : 0;
-  const color = percentage >= 80 ? "#10b981" : percentage >= 50 ? "#f59e0b" : "#ef4444";
-
-  return (
-    <div style={{ marginTop: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
-        <span style={{ color: "#64748b" }}>
-          Fixed: {current} / {total}
-        </span>
-        <span style={{ color, fontWeight: 600 }}>{percentage.toFixed(0)}%</span>
-      </div>
-      <div
-        style={{
-          width: "100%",
-          height: 8,
-          background: "#e2e8f0",
-          borderRadius: 4,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            width: `${percentage}%`,
-            height: "100%",
-            background: color,
-            transition: "width 0.3s ease",
-          }}
-        />
-      </div>
-    </div>
-  );
-};
-
 /* ---------- Main Component ---------- */
 export default function Securegenerator() {
   const [prompt, setPrompt] = useState("");
@@ -167,8 +101,9 @@ export default function Securegenerator() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [securityReportOpen, setSecurityReportOpen] = useState(false);
 
-  // UML modal state (her additions)
+  // UML modal state
   const [umlOpen, setUmlOpen] = useState(false);
   const [umlTab, setUmlTab] = useState<DiagramType>("class");
   const [aiUmlCache, setAiUmlCache] = useState<AiUmlStore>({});
@@ -180,6 +115,7 @@ export default function Securegenerator() {
     setUmlOpen(false);
     setShowOriginal(false);
     setAiUmlCache({});
+    setSecurityReportOpen(false);
 
     try {
       const res = await fetch(API, {
@@ -212,411 +148,779 @@ export default function Securegenerator() {
   return (
     <div
       style={{
+        display: "flex",
         width: "100vw",
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        padding: "40px 20px",
-        overflowX: "hidden",
+        height: "100vh",
+        background: "#0f172a",
+        overflow: "hidden",
       }}
     >
-      <main
+      {/* Sidebar */}
+      <div
         style={{
-          width: "100%",
-          maxWidth: "100%",
-          margin: "0 auto",
-          fontFamily: "system-ui, -apple-system, sans-serif",
+          width: 60,
+          background: "#1e1b2e",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          padding: "20px 0",
+          gap: 20,
+          borderRight: "1px solid #2d2a3d",
         }}
       >
-        {/* Header */}
-        <div
+        {/* Back Button */}
+        <button
+          onClick={() => window.history.back()}
           style={{
-            background: "white",
-            padding: 32,
-            borderRadius: 12,
-            boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
-            marginBottom: 24,
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            border: "1px solid rgba(255, 255, 255, 0.2)",
+            background: "rgba(255, 255, 255, 0.05)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.15)";
+            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.3)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
+            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.2)";
           }}
         >
-          <h1 style={{ margin: "0 0 8px 0", fontSize: 28, fontWeight: 700, color: "#1e293b" }}>
-            🔒 Secure-by-Design Code Generator
-          </h1>
-          <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>
-            Hybrid Autofix: Semgrep Native + LLM Intelligence • OWASP Protected • Multi-Language
-          </p>
+          <ArrowLeft size={22} style={{ color: "#ffffff", stroke: "#ffffff" }} strokeWidth={2.5} />
+        </button>
+
+        {/* Logo */}
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            background: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Zap size={24} color="#fff" />
         </div>
 
-        {/* Input Card */}
+        {/* Nav Icons */}
         <div
           style={{
-            background: "white",
-            padding: 24,
-            borderRadius: 12,
-            boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
-            marginBottom: 24,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            marginTop: 20,
           }}
         >
-          <label
+          <div
             style={{
-              display: "block",
-              marginBottom: 12,
-              fontSize: 14,
-              fontWeight: 600,
-              color: "#334155",
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: "#8b5cf6",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
             }}
           >
-            Describe the code you want to generate
-          </label>
-          <textarea
-            rows={5}
+            <Shield size={20} color="#fff" />
+          </div>
+          <div
             style={{
-              width: "100%",
-              padding: 16,
-              borderRadius: 8,
-              border: "2px solid #e2e8f0",
-              fontSize: 14,
-              fontFamily: "inherit",
-              resize: "vertical",
-              outline: "none",
-              boxSizing: "border-box",
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              opacity: 0.5,
             }}
-            placeholder="e.g., Build a user authentication API with JWT in Java, or Create a Python Flask app with SQL database"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onFocus={(e) => (e.target.style.borderColor = "#3b82f6")}
-            onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
-          />
-
-          <div style={{ marginTop: 16, display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button
-              onClick={onGenerate}
-              disabled={loading || !prompt.trim()}
-              style={{
-                flex: "1 1 220px",
-                padding: "14px 24px",
-                borderRadius: 8,
-                border: "none",
-                background: loading || !prompt.trim() ? "#cbd5e1" : "#3b82f6",
-                color: "white",
-                fontSize: 15,
-                fontWeight: 600,
-                cursor: loading || !prompt.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading ? "🔄 Generating..." : "✨ Generate Secure Code"}
-            </button>
-
-            {out?.code && (
-              <button
-                onClick={copyCode}
-                style={{
-                  padding: "14px 24px",
-                  borderRadius: 8,
-                  border: "2px solid #3b82f6",
-                  background: copied ? "#3b82f6" : "white",
-                  color: copied ? "white" : "#3b82f6",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                {copied ? "✓ Copied!" : "📋 Copy Code"}
-              </button>
-            )}
+          >
+            <Clock size={20} color="#94a3b8" />
+          </div>
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              opacity: 0.5,
+            }}
+          >
+            <BarChart3 size={20} color="#94a3b8" />
           </div>
         </div>
 
-        {out && (
+        {/* Settings at bottom */}
+        <div style={{ marginTop: "auto" }}>
           <div
             style={{
-              background: "white",
-              padding: 24,
-              borderRadius: 12,
-              boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              opacity: 0.5,
             }}
           >
-            {/* Auto-Fix Results */}
-            {fixSummary && fixSummary.initial_issues! > 0 && (
-              <Section title="🔧 Auto-Fix Results">
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                    gap: 12,
-                    marginBottom: 16,
-                  }}
-                >
-                  <StatCard label="Initial Issues" value={fixSummary.initial_issues!} color="#ef4444" />
-                  <StatCard label="Semgrep Fixed" value={fixSummary.semgrep_fixed!} color="#10b981" />
-                  {fixSummary.llm_fixed! > 0 && (
-                    <StatCard label="LLM Fixed" value={fixSummary.llm_fixed!} color="#3b82f6" />
-                  )}
-                  <StatCard
-                    label="Remaining"
-                    value={fixSummary.remaining_issues!}
-                    color={fixSummary.remaining_issues === 0 ? "#10b981" : "#f59e0b"}
-                  />
-                </div>
+            <Settings size={20} color="#94a3b8" />
+          </div>
+        </div>
+      </div>
 
-                <ProgressBar
-                  current={fixSummary.semgrep_fixed! + fixSummary.llm_fixed!}
-                  total={fixSummary.initial_issues!}
-                />
+      {/* Main Content */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* Top Header */}
+        <div
+          style={{
+            padding: "20px 32px",
+            borderBottom: "1px solid #1e293b",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "#e2e8f0" }}>
+            Secure Code Generator
+          </h1>
+          <div style={{ fontSize: 13, color: "#64748b" }}>•••</div>
+        </div>
 
-                <div
-                  style={{
-                    marginTop: 16,
-                    padding: 12,
-                    background: "#f8fafc",
-                    borderRadius: 6,
-                    fontSize: 13,
-                  }}
-                >
-                  <div style={{ marginBottom: 4, color: "#475569" }}>
-                    ✅ <strong>Auto-fixable (Semgrep):</strong> {semgrep?.auto_fixable_count || 0} rules
-                  </div>
-                  <div style={{ color: "#475569" }}>
-                    🔧 <strong>Required LLM:</strong> {semgrep?.manual_only_count || 0} rules
-                  </div>
-                </div>
-
-                {fixSummary.remaining_issues === 0 && fixSummary.initial_issues! > 0 && (
-                  <div
-                    style={{
-                      marginTop: 16,
-                      padding: 16,
-                      background: "linear-gradient(135deg, #dcfce7 0%, #86efac 100%)",
-                      borderRadius: 8,
-                      textAlign: "center",
-                      fontSize: 15,
-                      fontWeight: 600,
-                      color: "#166534",
-                    }}
-                  >
-                    🎉 All {fixSummary.initial_issues} vulnerabilities automatically fixed!
-                  </div>
-                )}
-
-                {llmFix?.attempted && (
-                  <div
-                    style={{
-                      marginTop: 12,
-                      padding: 12,
-                      background: llmFix.fixed ? "#eff6ff" : "#fef2f2",
-                      borderRadius: 6,
-                      fontSize: 13,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        color: llmFix.fixed ? "#1e40af" : "#991b1b",
-                        marginBottom: 4,
-                      }}
-                    >
-                      {llmFix.fixed ? "🤖 LLM Fix Applied" : "⚠️ LLM Fix Status"}
-                    </div>
-                    <div style={{ color: llmFix.fixed ? "#1e40af" : "#991b1b" }}>
-                      {llmFix.fixed
-                        ? `Fixed ${llmFix.fixes_applied} complex issues`
-                        : llmFix.error || llmFix.reason || "Not successful"}
-                    </div>
-                  </div>
-                )}
-              </Section>
-            )}
-
-            {/* Generated Code */}
-            <Section title="📝 Generated Code">
-              {out.original_code && out.original_code !== out.code && (
-                <div style={{ marginBottom: 12 }}>
-                  <button
-                    onClick={() => setShowOriginal(!showOriginal)}
-                    style={{
-                      padding: "8px 16px",
-                      borderRadius: 6,
-                      border: "1px solid #e2e8f0",
-                      background: showOriginal ? "#3b82f6" : "white",
-                      color: showOriginal ? "white" : "#3b82f6",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {showOriginal ? "Show Fixed Code" : "Show Original Code"}
-                  </button>
-                </div>
-              )}
-              <pre
+        {/* Scrollable Content */}
+        <div
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: "32px",
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: out ? "500px 1fr" : "1fr",
+              gap: 24,
+              maxWidth: 1600,
+            }}
+          >
+            {/* Left Column - Input */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+              {/* Input Card */}
+              <div
                 style={{
-                  whiteSpace: "pre-wrap",
-                  margin: 0,
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  background: "#0f172a",
-                  color: "#e2e8f0",
-                  padding: 20,
-                  borderRadius: 6,
-                  overflow: "auto",
-                  maxHeight: 600,
+                  background: "#1a1f2e",
+                  borderRadius: 16,
+                  padding: 24,
+                  border: "1px solid #2d3548",
                 }}
               >
-                {showOriginal ? out.original_code : out.code}
-              </pre>
-            </Section>
-
-            {/* UML Diagrams — her upgrades: lucide icons, UmlViewerModal, 4 diagram types, AI cache */}
-            <Section title="📊 UML Diagrams (Rule-based, AI-based)">
-              {!uml || uml.error ? (
-                <div
+                <label
                   style={{
-                    padding: 12,
-                    background: "#fef2f2",
-                    borderRadius: 6,
-                    color: "#991b1b",
+                    display: "block",
+                    marginBottom: 12,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#64748b",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Describe the code you want to generate
+                </label>
+                <textarea
+                  rows={6}
+                  style={{
+                    width: "100%",
+                    padding: 16,
+                    borderRadius: 12,
+                    border: "1px solid #2d3548",
                     fontSize: 13,
+                    fontFamily: "inherit",
+                    resize: "vertical",
+                    outline: "none",
+                    boxSizing: "border-box",
+                    background: "#0f1419",
+                    color: "#94a3b8",
+                    transition: "border-color 0.2s",
+                    lineHeight: 1.6,
                   }}
-                >
-                  {uml?.error
-                    ? `UML generation: ${uml.error}`
-                    : "No UML diagrams available for this generation (e.g. non-Java code)."}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <div style={{ fontSize: 13, color: "#64748b" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <FileSearch size={16} />
-                      <span>Files analysed for UML: {uml.file_count ?? 0}</span>
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 12,
-                        flexWrap: "wrap",
-                        marginTop: 8,
-                      }}
-                    >
-                      {(
-                        [
-                          { key: "class_svg" as const, label: "Class diagram" },
-                          { key: "package_svg" as const, label: "Package diagram" },
-                          { key: "sequence_svg" as const, label: "Sequence diagram" },
-                          { key: "component_svg" as const, label: "Component diagram" },
-                          { key: "activity_svg" as const, label: "Activity diagram" },
-                        ]
-                      ).map(({ key, label }, idx, arr) => (
-                        <span key={key} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                          {label}:{" "}
-                          {uml[key] ? (
-                            <CheckCircle2 size={16} color="#16a34a" />
-                          ) : (
-                            <MinusCircle size={16} color="#94a3b8" />
-                          )}
-                          {uml[key] ? "available" : "—"}
-                          {idx < arr.length - 1 && (
-                            <span style={{ opacity: 0.4, marginLeft: 6 }}>•</span>
-                          )}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                  placeholder="e.g., give javascript code for student management system..."
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
+                  onBlur={(e) => (e.target.style.borderColor = "#2d3548")}
+                />
 
+                <div style={{ marginTop: 20, display: "flex", gap: 12 }}>
                   <button
-                    onClick={() => {
-                      if (!uml) return;
-                      const defaultTab: DiagramType = uml.class_svg
-                        ? "class"
-                        : uml.package_svg
-                        ? "package"
-                        : uml.sequence_svg
-                        ? "sequence"
-                        : uml.component_svg
-                        ? "component"
-                        : "activity";
-                      setUmlTab(defaultTab);
-                      setUmlOpen(true);
-                    }}
+                    onClick={onGenerate}
+                    disabled={loading || !prompt.trim()}
                     style={{
-                      padding: "10px 18px",
-                      borderRadius: 8,
+                      flex: 1,
+                      padding: "14px 24px",
+                      borderRadius: 10,
                       border: "none",
-                      background: "#0ea5e9",
+                      background:
+                        loading || !prompt.trim()
+                          ? "#2d3548"
+                          : "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)",
                       color: "white",
                       fontSize: 14,
                       fontWeight: 600,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                      display: "inline-flex",
+                      cursor: loading || !prompt.trim() ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      transition: "transform 0.2s",
+                    }}
+                  >
+                    <Sparkles size={18} />
+                    {loading ? "Generating..." : "Generate Secure Code"}
+                  </button>
+
+                  {out?.code && (
+                    <button
+                      onClick={copyCode}
+                      style={{
+                        padding: "14px 20px",
+                        borderRadius: 10,
+                        border: "1px solid #2d3548",
+                        background: copied ? "#8b5cf6" : "transparent",
+                        color: copied ? "#fff" : "#94a3b8",
+                        fontSize: 14,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      {copied ? <Check size={18} /> : <Copy size={18} />}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* UML Diagrams - Always visible when code is generated */}
+              {out && (
+                <div
+                  style={{
+                    background: "#1a1f2e",
+                    borderRadius: 16,
+                    padding: 24,
+                    border: "1px solid #2d3548",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: "#64748b",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.1em",
+                      marginBottom: 20,
+                      display: "flex",
                       alignItems: "center",
                       gap: 8,
                     }}
                   >
-                    <Workflow size={16} />
-                    Open UML Viewer
-                  </button>
+                    <Workflow size={14} color="#ec4899" />
+                    UML Diagrams
+                  </div>
+
+                  {!uml || uml.error ? (
+                    <div
+                      style={{
+                        padding: 16,
+                        background: "#0f1419",
+                        borderRadius: 8,
+                        border: "1px solid #2d3548",
+                        color: "#64748b",
+                        fontSize: 13,
+                        textAlign: "center",
+                      }}
+                    >
+                      {uml?.error
+                        ? `UML generation: ${uml.error}`
+                        : "No UML diagrams available for this generation (e.g. non-Java code)."}
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: 12,
+                          marginBottom: 20,
+                        }}
+                      >
+                        {[
+                          { key: "class_svg" as const, label: "Class Diagram" },
+                          { key: "package_svg" as const, label: "Package Diagram" },
+                          { key: "sequence_svg" as const, label: "Sequence Diagram" },
+                          { key: "component_svg" as const, label: "Component Diagram" },
+                          { key: "activity_svg" as const, label: "Activity Diagram" },
+                        ].map(({ key, label }) => (
+                          <div
+                            key={key}
+                            style={{
+                              padding: 12,
+                              background: "#0f1419",
+                              borderRadius: 8,
+                              border: `1px solid ${uml[key] ? "#8b5cf6" : "#2d3548"}`,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                            }}
+                          >
+                            {uml[key] ? (
+                              <CheckCircle2 size={16} color="#8b5cf6" />
+                            ) : (
+                              <MinusCircle size={16} color="#475569" />
+                            )}
+                            <span
+                              style={{
+                                fontSize: 12,
+                                color: uml[key] ? "#8b5cf6" : "#64748b",
+                                fontWeight: 500,
+                              }}
+                            >
+                              {label}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          if (!uml) return;
+                          const defaultTab: DiagramType =
+                            uml.class_svg ? "class" :
+                            uml.package_svg ? "package" :
+                            uml.sequence_svg ? "sequence" :
+                            uml.component_svg ? "component" : "activity";
+                          setUmlTab(defaultTab);
+                          setUmlOpen(true);
+                        }}
+                        style={{
+                          width: "100%",
+                          padding: "12px 20px",
+                          borderRadius: 10,
+                          border: "none",
+                          background: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)",
+                          color: "white",
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <Workflow size={16} />
+                        Open UML Viewer
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
-            </Section>
 
-            {/* Security Report */}
-            <Section title="📋 Security Report">
-              <div style={{ marginBottom: 12, fontSize: 12, color: "#64748b" }}>
-                Policy: {out.report.policy_version ?? "N/A"}
+              {/* Auto-Fix Results - Below UML, only when vulnerabilities found */}
+              {out && fixSummary && fixSummary.initial_issues! > 0 && (
+                <div
+                  style={{
+                    background: "#1a1f2e",
+                    borderRadius: 16,
+                    padding: 24,
+                    border: "1px solid #2d3548",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: "#64748b",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.1em",
+                      marginBottom: 20,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <Shield size={14} color="#8b5cf6" />
+                    Auto-Fix Results
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 12,
+                      marginBottom: 20,
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: 16,
+                        background: "#0f1419",
+                        borderRadius: 12,
+                        border: "1px solid #2d3548",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "#64748b",
+                          marginBottom: 8,
+                          textTransform: "uppercase",
+                          fontWeight: 600,
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Initial Issues
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 700, color: "#ef4444" }}>
+                        {fixSummary.initial_issues}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: 16,
+                        background: "#0f1419",
+                        borderRadius: 12,
+                        border: "1px solid #2d3548",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "#64748b",
+                          marginBottom: 8,
+                          textTransform: "uppercase",
+                          fontWeight: 600,
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Semgrep Fixed
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 700, color: "#10b981" }}>
+                        {fixSummary.semgrep_fixed}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: 16,
+                        background: "#0f1419",
+                        borderRadius: 12,
+                        border: "1px solid #2d3548",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "#64748b",
+                          marginBottom: 8,
+                          textTransform: "uppercase",
+                          fontWeight: 600,
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        LLM Fixed
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 700, color: "#3b82f6" }}>
+                        {fixSummary.llm_fixed || 0}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: 16,
+                        background: "#0f1419",
+                        borderRadius: 12,
+                        border: "1px solid #2d3548",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "#64748b",
+                          marginBottom: 8,
+                          textTransform: "uppercase",
+                          fontWeight: 600,
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        Remaining
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 28,
+                          fontWeight: 700,
+                          color: fixSummary.remaining_issues === 0 ? "#10b981" : "#f59e0b",
+                        }}
+                      >
+                        {fixSummary.remaining_issues}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Progress Bar */}
+                  <div style={{ marginBottom: 16 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        marginBottom: 8,
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: "#64748b" }}>
+                        Progress: Fixed {fixSummary.semgrep_fixed! + fixSummary.llm_fixed!}/
+                        {fixSummary.initial_issues}
+                      </span>
+                      <span style={{ color: "#10b981", fontWeight: 700 }}>
+                        {fixSummary.fix_rate_percent?.toFixed(0)}%
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        width: "100%",
+                        height: 8,
+                        background: "#0f1419",
+                        borderRadius: 999,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${fixSummary.fix_rate_percent}%`,
+                          height: "100%",
+                          background: "#10b981",
+                          transition: "width 0.5s ease",
+                          borderRadius: 999,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Success Message */}
+                  {fixSummary.remaining_issues === 0 && (
+                    <div
+                      style={{
+                        padding: 12,
+                        background: "rgba(16, 185, 129, 0.1)",
+                        borderRadius: 8,
+                        border: "1px solid rgba(16, 185, 129, 0.3)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: 13,
+                        color: "#10b981",
+                        fontWeight: 500,
+                      }}
+                    >
+                      <CheckCircle2 size={16} />
+                      All {fixSummary.initial_issues} vulnerabilities automatically fixed!
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Right Column - Results */}
+            {out && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                {/* Generated Code */}
+                <div
+                  style={{
+                    background: "#1a1f2e",
+                    borderRadius: 16,
+                    padding: 24,
+                    border: "1px solid #2d3548",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#64748b",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.1em",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Code2 size={14} color="#8b5cf6" />
+                      Generated Code
+                    </div>
+                    {out.original_code && out.original_code !== out.code && (
+                      <button
+                        onClick={() => setShowOriginal(!showOriginal)}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          border: "1px solid #8b5cf6",
+                          background: showOriginal ? "#8b5cf6" : "transparent",
+                          color: showOriginal ? "#fff" : "#8b5cf6",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        {showOriginal ? "Show Fixed" : "Show Original"}
+                      </button>
+                    )}
+                  </div>
+
+                  <pre
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      margin: 0,
+                      fontSize: 12,
+                      lineHeight: 1.7,
+                      background: "#0a0f1a",
+                      color: "#e2e8f0",
+                      padding: 20,
+                      borderRadius: 10,
+                      overflow: "auto",
+                      maxHeight: 500,
+                      fontFamily: "'Fira Code', 'Cascadia Code', monospace",
+                    }}
+                  >
+                    {showOriginal ? out.original_code : out.code}
+                  </pre>
+                </div>
+
+                {/* Security Report */}
+                <div
+                  style={{
+                    background: "#1a1f2e",
+                    borderRadius: 16,
+                    padding: 24,
+                    border: "1px solid #2d3548",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => setSecurityReportOpen(!securityReportOpen)}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#64748b",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.1em",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Shield size={14} color="#a855f7" />
+                      Security Report
+                    </div>
+                    <ChevronDown
+                      size={16}
+                      color="#64748b"
+                      style={{
+                        transform: securityReportOpen ? "rotate(180deg)" : "rotate(0deg)",
+                        transition: "transform 0.2s",
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: 12, fontSize: 11, color: "#64748b" }}>
+                    Policy: {out.report.policy_version ?? "LLM01-2025-v1"}
+                  </div>
+
+                  {securityReportOpen && (
+                    <>
+                      <div
+                        style={{
+                          marginTop: 16,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: 12,
+                          color: "#8b5cf6",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <Code2 size={14} />
+                        View Enhanced Prompt
+                      </div>
+                      <pre
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          margin: "12px 0 0 0",
+                          fontSize: 11,
+                          background: "#0a0f1a",
+                          color: "#64748b",
+                          padding: 16,
+                          borderRadius: 8,
+                          maxHeight: 300,
+                          overflow: "auto",
+                          fontFamily: "monospace",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        {out.report.prompt_after_enhancement}
+                      </pre>
+                    </>
+                  )}
+                </div>
               </div>
-              <details>
-                <summary
-                  style={{
-                    fontWeight: 600,
-                    padding: "8px 0",
-                    color: "#3b82f6",
-                    cursor: "pointer",
-                  }}
-                >
-                  View Enhanced Prompt
-                </summary>
-                <pre
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    margin: "12px 0 0 0",
-                    fontSize: 11,
-                    background: "#f8fafc",
-                    padding: 16,
-                    borderRadius: 6,
-                    maxHeight: 400,
-                    overflow: "auto",
-                    color: "#334155",
-                  }}
-                >
-                  {out.report.prompt_after_enhancement}
-                </pre>
-              </details>
-            </Section>
+            )}
           </div>
-        )}
-
-        {/* Footer */}
-        <div
-          style={{
-            marginTop: 40,
-            padding: 20,
-            textAlign: "center",
-            color: "rgba(255,255,255,0.92)",
-            fontSize: 13,
-          }}
-        >
-          Hybrid Autofix: Semgrep Native (~35%) + LLM Intelligence (~65%) • OWASP Protected • Multi-Language
         </div>
-      </main>
+      </div>
 
-      {/* UML Modal (her addition) */}
+      {/* UML Modal */}
       {uml && !uml.error && (
         <UmlViewerModal
           open={umlOpen}
