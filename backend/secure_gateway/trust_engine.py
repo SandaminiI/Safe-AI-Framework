@@ -9,20 +9,26 @@ Design Principles (from research proposal):
   2. Normal, valid requests NEVER reduce trust.
   3. Trust decreases ONLY for verified anomalies / violations:
        - Policy violations
-       - High-frequency abnormal request rate
+       - High-frequency abnormal request rate (in-memory sliding window)
        - Invalid or expired certificate
        - Repeated access to sensitive routes while anomaly-flagged
        - Failed authentication attempts
   4. Passive recovery: +TRUST_RECOVERY_AMOUNT every
      TRUST_RECOVERY_INTERVAL_SECONDS of clean behaviour, capped at 100.
+     Recovery is bounded to prevent over-accumulation across cycles.
   5. Maintains per-plugin: last_request_at, request_frequency, anomaly_flag.
   6. Public entry point: evaluate_behavior(…)
-  7. Rate-based anomaly detection: >N requests in T seconds -> anomaly.
+  7. Rate-based anomaly detection uses O(1) in-memory sliding window
+     (deque per plugin) — DB is used for audit logging only.
+  8. Revocation: trust_score < 20 → status "revoked", cached JWT
+     invalidated, full re-authentication required via Station 1.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 
@@ -34,6 +40,7 @@ from config import (
     TRUST_MAX,
     ACTIVE_THRESHOLD,
     RESTRICTED_THRESHOLD,
+    REVOKED_THRESHOLD,
     TRUST_WINDOW_SECONDS,
     RATE_LIMIT_MAX_REQUESTS,
     RATE_LIMIT_WINDOW_SECONDS,
@@ -53,6 +60,47 @@ log = logging.getLogger("trust_engine")
 
 
 # ──────────────────────────────────────────────────────────────────────────── #
+#  In-memory sliding-window rate tracker  (O(1) per request)                   #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+_rate_lock = threading.Lock()
+_rate_windows: Dict[str, deque] = {}
+# Maps plugin_id → deque of datetime timestamps within the current window.
+
+
+def _record_request_timestamp(plugin_id: str) -> int:
+    """
+    Append the current timestamp to the plugin's sliding window and evict
+    expired entries.  Returns the current request count within the window.
+
+    Thread-safe via ``_rate_lock``.
+    """
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
+
+    with _rate_lock:
+        window = _rate_windows.setdefault(plugin_id, deque())
+
+        # Evict timestamps older than the sliding window
+        while window and window[0] < cutoff:
+            window.popleft()
+
+        window.append(now)
+        return len(window)
+
+
+def _detect_rate_anomaly_inmemory(plugin_id: str) -> bool:
+    """
+    Return *True* when the plugin has exceeded ``RATE_LIMIT_MAX_REQUESTS``
+    within the last ``RATE_LIMIT_WINDOW_SECONDS``.
+
+    Uses the in-memory deque — **no DB queries**.
+    """
+    count = _record_request_timestamp(plugin_id)
+    return count > RATE_LIMIT_MAX_REQUESTS
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
 #  Internal helpers                                                            #
 # ──────────────────────────────────────────────────────────────────────────── #
 
@@ -62,12 +110,22 @@ def _clamp(value: float, lo: float = TRUST_MIN, hi: float = TRUST_MAX) -> float:
 
 
 def _status_from_score(score: float) -> str:
-    """Derive the plugin status string from a numeric trust score."""
+    """
+    Derive the plugin status string from a numeric trust score.
+
+    Status ladder (highest → lowest):
+      active   : score ≥ 70
+      restricted : 40 ≤ score < 70
+      blocked  : 20 ≤ score < 40
+      revoked  : score < 20  — requires full re-auth via Station 1
+    """
     if score >= ACTIVE_THRESHOLD:
         return "active"
     if score >= RESTRICTED_THRESHOLD:
         return "restricted"
-    return "blocked"
+    if score >= REVOKED_THRESHOLD:
+        return "blocked"
+    return "revoked"
 
 
 # ──────────────────────────────────────────────────────────────────────────── #
@@ -95,16 +153,27 @@ def _record_trust_event(
 
 
 # ──────────────────────────────────────────────────────────────────────────── #
-#  Passive trust recovery                                                      #
+#  Passive trust recovery  (cleaned — bounded accumulation)                    #
 # ──────────────────────────────────────────────────────────────────────────── #
+
+# Tracks the last recovery-credit timestamp per plugin so that recovery
+# intervals are consumed once and never double-counted across calls.
+_last_recovery_applied: Dict[str, datetime] = {}
+
 
 def _apply_trust_recovery(plugin: Plugin) -> float:
     """
-    Award +TRUST_RECOVERY_AMOUNT for every TRUST_RECOVERY_INTERVAL_SECONDS
-    elapsed since the last anomaly, up to TRUST_MAX.
+    Award +TRUST_RECOVERY_AMOUNT for every full
+    TRUST_RECOVERY_INTERVAL_SECONDS elapsed **since the last time
+    recovery was credited**, up to TRUST_MAX.
 
-    Recovery is suppressed while the anomaly flag is active.
-    If the plugin has never had an anomaly, score stays as-is.
+    Guards:
+      - Suppressed while ``anomaly_flag`` is active.
+      - Suppressed when plugin was never penalised (pristine score).
+      - Consumes the credited intervals so they cannot be counted again
+        in later calls (prevents over-accumulation across cycles).
+      - If the score has already reached TRUST_MAX, no further recovery
+        is applied.
     """
     if plugin.anomaly_flag:
         return plugin.trust_score
@@ -113,38 +182,54 @@ def _apply_trust_recovery(plugin: Plugin) -> float:
         # Never penalised — trust is pristine; nothing to recover.
         return plugin.trust_score
 
+    if plugin.trust_score >= TRUST_MAX:
+        return plugin.trust_score
+
     now = datetime.now(UTC)
-    elapsed = (now - plugin.last_anomaly_at).total_seconds()
+
+    # Determine the baseline for counting recovery intervals.
+    # Use the later of: last_anomaly_at, last recovery credit.
+    baseline = _last_recovery_applied.get(plugin.plugin_id, plugin.last_anomaly_at)
+
+    elapsed = (now - baseline).total_seconds()
     intervals = int(elapsed / TRUST_RECOVERY_INTERVAL_SECONDS)
     if intervals <= 0:
         return plugin.trust_score
 
     recovery = intervals * TRUST_RECOVERY_AMOUNT
-    return _clamp(plugin.trust_score + recovery)
+    new_score = _clamp(plugin.trust_score + recovery)
 
+    # Advance the baseline by *exactly* the consumed intervals so that
+    # leftover fractional time carries over to the next call.
+    _last_recovery_applied[plugin.plugin_id] = baseline + timedelta(
+        seconds=intervals * TRUST_RECOVERY_INTERVAL_SECONDS
+    )
 
-# ──────────────────────────────────────────────────────────────────────────── #
-#  Rate-based anomaly detection                                                #
-# ──────────────────────────────────────────────────────────────────────────── #
-
-def _detect_rate_anomaly(db: Session, plugin_id: str) -> bool:
-    """
-    Return True when the plugin has exceeded RATE_LIMIT_MAX_REQUESTS
-    within the last RATE_LIMIT_WINDOW_SECONDS.
-    """
-    window_start = datetime.now(UTC) - timedelta(seconds=RATE_LIMIT_WINDOW_SECONDS)
-    count = db.execute(
-        select(func.count(RequestLog.id)).where(
-            RequestLog.plugin_id == plugin_id,
-            RequestLog.created_at >= window_start,
-        )
-    ).scalar_one()
-    return count > RATE_LIMIT_MAX_REQUESTS
+    return new_score
 
 
 def _is_sensitive_route(path: str) -> bool:
     """Return True if *path* matches a sensitive / high-risk route prefix."""
     return any(path.startswith(pfx) for pfx in SENSITIVE_ROUTE_PREFIXES)
+
+
+# ──────────────────────────────────────────────────────────────────────────── #
+#  JWT-cache invalidation hook (called when plugin is revoked)                 #
+# ──────────────────────────────────────────────────────────────────────────── #
+
+def _invalidate_jwt_cache(plugin_id: str) -> None:
+    """
+    Remove a plugin's cached JWT so that it must re-authenticate
+    through Station 1.  Imported lazily to avoid circular imports.
+    """
+    try:
+        # app.py maintains _plugin_jwt_cache at module level
+        from app import _plugin_jwt_cache
+        if plugin_id in _plugin_jwt_cache:
+            del _plugin_jwt_cache[plugin_id]
+            log.info("[TRUST] Invalidated cached JWT for revoked plugin=%s", plugin_id)
+    except (ImportError, AttributeError):
+        pass  # defensive: app module may not be loaded in tests
 
 
 # ──────────────────────────────────────────────────────────────────────────── #
@@ -158,7 +243,8 @@ def evaluate_behavior(
     request_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Central behavioural evaluation — called on every proxied request.
+    Central behavioural evaluation — called on every proxied request
+    **and** on every security failure (auth failure, policy block, etc.).
 
     Parameters
     ----------
@@ -174,9 +260,9 @@ def evaluate_behavior(
         - ``status_code``      (int)  — response status code
         - ``latency_ms``       (float)
         - ``error_flag``       (bool) — True when status_code >= 400
-        - ``cert_valid``       (bool) — False -> invalid/expired certificate
-        - ``auth_failed``      (bool) — True -> authentication failure
-        - ``policy_violation`` (bool) — True -> policy engine denied the request
+        - ``cert_valid``       (bool) — False → invalid/expired certificate
+        - ``auth_failed``      (bool) — True → authentication failure
+        - ``policy_violation`` (bool) — True → policy engine denied the request
 
     Returns
     -------
@@ -224,8 +310,8 @@ def evaluate_behavior(
         delta -= penalty
         reasons.append(f"Authentication failure (-{penalty})")
 
-    # ── 5. Rate-based anomaly detection ──────────────────────────────── #
-    if _detect_rate_anomaly(db, plugin_id):
+    # ── 5. Rate-based anomaly detection (in-memory sliding window) ──── #
+    if _detect_rate_anomaly_inmemory(plugin_id):
         penalty = TRUST_PENALTY_RATE_ANOMALY
         delta -= penalty
         reasons.append(
@@ -240,6 +326,8 @@ def evaluate_behavior(
             cooldown_elapsed = (now - plugin.last_anomaly_at).total_seconds()
             if cooldown_elapsed > RATE_LIMIT_WINDOW_SECONDS:
                 plugin.anomaly_flag = False
+                # Reset recovery baseline so recovery begins from *now*
+                _last_recovery_applied[plugin_id] = now
                 log.info("[TRUST] plugin=%s anomaly flag cleared after cooldown", plugin_id)
 
     # ── 6. Sensitive-route abuse ─────────────────────────────────────── #
@@ -269,8 +357,20 @@ def evaluate_behavior(
         plugin.trust_score = new_score
         if delta < 0.0:
             plugin.last_anomaly_at = now
+            # Reset recovery baseline so recovery starts fresh after penalty
+            _last_recovery_applied[plugin_id] = now
 
-    plugin.status = _status_from_score(plugin.trust_score)
+    # ── 9. Derive status (including revoked at <20) ──────────────────── #
+    new_status = _status_from_score(plugin.trust_score)
+    old_status = plugin.status
+    plugin.status = new_status
+
+    # ── 10. If newly revoked → invalidate JWT cache ──────────────────── #
+    if new_status == "revoked" and old_status != "revoked":
+        _invalidate_jwt_cache(plugin_id)
+        reasons.append("Plugin REVOKED — cached JWT invalidated, re-auth required")
+        log.warning("[TRUST] plugin=%s REVOKED (score=%.1f)", plugin_id, plugin.trust_score)
+
     db.commit()
 
     log.info(

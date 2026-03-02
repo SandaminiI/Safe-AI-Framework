@@ -24,7 +24,8 @@ TRUST_MAX = 100.0
 
 ACTIVE_THRESHOLD = 70.0              # score ≥ 70  → active
 RESTRICTED_THRESHOLD = 40.0          # score 40–69 → restricted
-#                                      score < 40  → blocked
+REVOKED_THRESHOLD = 20.0             # score < 20  → revoked (hard deny, JWT invalidated)
+#                                      score 20–39 → blocked
 
 # ── Trust penalties (applied ONLY on verified anomalies) ────────────────────
 TRUST_PENALTY_POLICY_VIOLATION = 15.0

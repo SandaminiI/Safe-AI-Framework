@@ -21,6 +21,7 @@ from config import (
     SCOPE_MIN_TRUST,
 )
 from policy_engine import evaluate as policy_evaluate, Decision
+from trust_engine import evaluate_behavior
 
 log = logging.getLogger("station2")
 
@@ -37,12 +38,26 @@ class Station2AccessControl:
     ) -> Tuple[bool, Dict[str, Any], str]:
         """
         Main Station 2 logic: Validate JWT and check access policy.
+
+        Every denial is fed back into the trust engine via
+        ``evaluate_behavior`` so that repeated failures continuously
+        degrade the plugin's trust score.
+
         Returns: (access_granted, context, error_message)
         """
         # Step 1: Verify JWT signature and decode
         try:
             payload = verify_jwt_with_intent(jwt_token)
         except Exception as e:
+            # JWT invalid / expired — feed auth failure into trust engine
+            # Try to extract plugin_id from the raw token for attribution
+            pid = self._safe_extract_plugin_id(jwt_token)
+            if pid:
+                evaluate_behavior(db, pid, requested_path, {
+                    "method": requested_method, "status_code": 401, "latency_ms": 0,
+                    "error_flag": True, "cert_valid": True,
+                    "auth_failed": True, "policy_violation": False,
+                })
             return False, {}, f"Invalid JWT: {str(e)}"
 
         # Step 2: Extract claims
@@ -60,6 +75,18 @@ class Station2AccessControl:
         if not plugin:
             return False, {}, f"Plugin {plugin_id} not found in database"
 
+        # Step 3b: Revoked plugins must re-authenticate via Station 1
+        if plugin.status == "revoked":
+            evaluate_behavior(db, plugin_id, requested_path, {
+                "method": requested_method, "status_code": 403, "latency_ms": 0,
+                "error_flag": True, "cert_valid": True,
+                "auth_failed": True, "policy_violation": True,
+            })
+            return (
+                False, {},
+                f"Plugin {plugin_id} is REVOKED — full re-authentication via Station 1 required"
+            )
+
         # Step 4: Use LIVE trust score from DB (not the JWT snapshot)
         live_trust = plugin.trust_score
 
@@ -73,6 +100,12 @@ class Station2AccessControl:
         )
 
         if policy_result.decision in (Decision.HARD_BLOCK, Decision.TEMPORARY_BLOCK):
+            # Feed policy denial into trust engine for continuous degradation
+            evaluate_behavior(db, plugin_id, requested_path, {
+                "method": requested_method, "status_code": 403, "latency_ms": 0,
+                "error_flag": True, "cert_valid": True,
+                "auth_failed": False, "policy_violation": True,
+            })
             log.warning(
                 "[STATION 2] DENIED plugin=%s decision=%s reason=%s",
                 plugin_id, policy_result.decision.value, policy_result.reason,
@@ -82,6 +115,12 @@ class Station2AccessControl:
         # Step 6: Check minimum trust score for scope
         min_trust = SCOPE_MIN_TRUST.get(scope, 80.0)
         if live_trust < min_trust:
+            # Feed scope-trust failure into trust engine
+            evaluate_behavior(db, plugin_id, requested_path, {
+                "method": requested_method, "status_code": 403, "latency_ms": 0,
+                "error_flag": True, "cert_valid": True,
+                "auth_failed": True, "policy_violation": False,
+            })
             return (
                 False, {},
                 f"Trust score {live_trust:.1f} below minimum {min_trust} for scope '{scope}'"
@@ -90,6 +129,12 @@ class Station2AccessControl:
         # Step 7: Check intent permissions for requested method
         allowed_methods = INTENT_PERMISSIONS.get(intent, [])
         if requested_method not in allowed_methods:
+            # Feed intent permission denial into trust engine
+            evaluate_behavior(db, plugin_id, requested_path, {
+                "method": requested_method, "status_code": 403, "latency_ms": 0,
+                "error_flag": True, "cert_valid": True,
+                "auth_failed": False, "policy_violation": True,
+            })
             return (
                 False, {},
                 f"Method {requested_method} not allowed for intent '{intent}'"
@@ -129,6 +174,23 @@ class Station2AccessControl:
                 "scope": payload.get("scope"),
                 "trust_score": payload.get("trust_score"),
             }
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_extract_plugin_id(jwt_token: str) -> Optional[str]:
+        """
+        Best-effort extraction of plugin_id from a JWT that may be
+        expired or malformed.  Used for attributing auth failures.
+        """
+        try:
+            import jwt as _jwt
+            from config import JWT_SECRET, JWT_ALG
+            payload = _jwt.decode(
+                jwt_token, JWT_SECRET, algorithms=[JWT_ALG],
+                options={"verify_exp": False},
+            )
+            return payload.get("sub")
         except Exception:
             return None
 

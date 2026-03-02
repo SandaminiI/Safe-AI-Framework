@@ -126,6 +126,17 @@ def evaluate(
     score = plugin.trust_score
     risk = classify_route(path)
 
+    # ── Rule 0: Revoked plugin → immediate hard block ────────────────── #
+    # Revoked plugins (trust < 20) must re-authenticate via Station 1.
+    if plugin.status == "revoked":
+        result = PolicyResult(
+            Decision.HARD_BLOCK, risk,
+            "Plugin is REVOKED (trust < 20) — full re-authentication required",
+            score,
+        )
+        _log_decision(plugin.plugin_id, result, path, method)
+        return result
+
     # ── Rule 1: Invalid certificate → immediate hard block ────────────── #
     if not cert_valid:
         result = PolicyResult(
