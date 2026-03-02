@@ -18,6 +18,7 @@ Edges used:
   IMPLEMENTS    TypeDecl → TypeDecl
   ASSOCIATES    TypeDecl → TypeDecl
   DEPENDS_ON    TypeDecl → TypeDecl
+  CALLS         Method   → Method       (ordered by 'order' attr)
 """
 from __future__ import annotations
 
@@ -61,26 +62,25 @@ def _is_dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
 
-def _is_trivial_getter_setter(name: str) -> bool:
-    if not name:
-        return False
-    return (
-        (name.startswith("get") and len(name) > 3)
-        or (name.startswith("set") and len(name) > 3)
-        or (name.startswith("is")  and len(name) > 2)
-    )
-
-
 def _clean_type(raw: str) -> str:
     """Strip leading module path, e.g. 'java.util.List<String>' → 'List<String>'."""
     if not raw:
         return "void"
-    # keep generics but trim FQN prefix of the outermost type
     base = raw.split("[")[0].split("<")[0]
     if "." in base:
         short = base.rsplit(".", 1)[1]
         raw = raw[len(base) - len(short):]
     return raw
+
+
+def _clean_type_short(raw: str) -> str:
+    """Strip generics entirely, just keep base name."""
+    if not raw:
+        return ""
+    t = re.sub(r"<.*?>", "", raw)
+    if "." in t:
+        t = t.rsplit(".", 1)[1]
+    return t.strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,10 +107,6 @@ def _build_edge_maps(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get(node: Dict[str, Any], *keys: str, default: str = "") -> str:
-    """
-    Try each key first at top-level, then inside node['attrs'].
-    Returns the first non-empty match.
-    """
     attrs = node.get("attrs") or {}
     for k in keys:
         v = node.get(k) or attrs.get(k)
@@ -145,7 +141,87 @@ def _get_mods(node: Dict[str, Any]) -> Tuple[str, ...]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Main public function
+#  Architecture layer ordering
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LAYER_ORDER: Dict[str, int] = {
+    "client":      5,
+    "controller":  10,
+    "resource":    10,
+    "endpoint":    10,
+    "rest":        10,
+    "handler":     12,
+    "api":         15,
+    "service":     20,
+    "manager":     22,
+    "facade":      22,
+    "business":    22,
+    "interactor":  22,
+    "usecase":     22,
+    "repository":  30,
+    "repo":        30,
+    "dao":         30,
+    "persistence": 32,
+    "store":       32,
+    "data":        35,
+    "gateway":     38,
+    "database":    40,
+    "db":          40,
+    "entity":      45,
+    "model":       50,
+    "domain":      50,
+    "util":        60,
+    "helper":      60,
+    "config":      70,
+    "security":    75,
+    "filter":      74,
+    "middleware":  73,
+}
+
+
+def _layer_order(type_name: str, package: str) -> int:
+    combined = (type_name + " " + (package or "")).lower()
+    best = 55
+    for keyword, order in _LAYER_ORDER.items():
+        if keyword in combined:
+            if order < best:
+                best = order
+    return best
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Model / POJO detection (for excluding from activity flow)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MODEL_PKG_KW     = {"model", "entity", "domain", "dto", "vo", "bean", "pojo"}
+_BEHAVIOUR_PKG_KW = {"util", "utils", "helper", "helpers", "service", "services",
+                     "manager", "managers", "dao", "repository", "config"}
+_BEHAVIOUR_SFXS   = ("util", "utils", "helper", "helpers", "service", "manager",
+                     "dao", "repo", "repository", "config", "factory")
+_TRIVIAL_PFXS     = ("get", "set", "is", "has")
+_TRIVIAL_NAMES    = {"tostring", "hashcode", "equals", "clone", "compareto"}
+
+
+def _is_pure_model(name: str, pkg: str, methods: List[Dict[str, Any]]) -> bool:
+    nm  = (name or "").lower()
+    pkg = (pkg  or "").lower()
+    if any(kw in pkg for kw in _BEHAVIOUR_PKG_KW):
+        return False
+    if any(nm.endswith(sfx) for sfx in _BEHAVIOUR_SFXS):
+        return False
+    if any(kw in pkg or kw in nm for kw in _MODEL_PKG_KW):
+        return True
+    ms = [m for m in methods if not m.get("is_constructor") and not _is_dunder(m.get("name", ""))]
+    if not ms:
+        return False
+    non_trivial = [m for m in ms
+                   if not any(m.get("name", "").startswith(p) for p in _TRIVIAL_PFXS)
+                   and m.get("name", "").lower() not in _TRIVIAL_NAMES]
+    return len(non_trivial) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Diagram-specific summarizers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _summarize_package(
@@ -153,11 +229,6 @@ def _summarize_package(
     type_names: Dict[str, str],
     edges: List[Dict[str, Any]],
 ) -> str:
-    """
-    Context for PACKAGE diagram — matches rule-based output exactly:
-    - Full FQN package labels with class/interface keywords inside (no bodies)
-    - Type-level arrows placed after all package blocks (not package-level arrows)
-    """
     from collections import defaultdict as _dd
     lines = ["PACKAGE DIAGRAM CONTEXT", ""]
 
@@ -165,7 +236,6 @@ def _summarize_package(
     for type_id, tnode in type_info.items():
         tname = type_names[type_id]
         pkg   = _get(tnode, "package", default="(default)")
-        # kind lives in attrs, not at the top-level node (which has kind="TypeDecl")
         attrs = tnode.get("attrs") or tnode
         kind  = (attrs.get("kind") or "class").lower()
         pkg_to_types[pkg].append((tname, kind))
@@ -223,13 +293,6 @@ def _summarize_component(
     outgoing: Any,
     nodes_by_id: Dict[str, Any],
 ) -> str:
-    """
-    Context for COMPONENT diagram — matches rule-based output exactly:
-    - Individual classes become [Component] as alias inside package blocks
-    - Depended-on components get () lollipop + assembly connector
-    - Arrows target lollipop aliases (I_alias), not component aliases
-    - Root package = full FQN; sub-packages = short last segment + <<Stereotype>>
-    """
     import re as _re
     from collections import defaultdict as _dd
 
@@ -270,7 +333,6 @@ def _summarize_component(
     def _ialias(tid: str) -> str:
         return "I_t_" + _re.sub(r"[^a-zA-Z0-9]", "_", type_names.get(tid, tid))
 
-    # Compute which types are depended-on (need lollipop)
     called: set = set()
     dep_edges = []
     for e in edges:
@@ -282,7 +344,6 @@ def _summarize_component(
                 dep_edges.append((src, dst))
                 called.add(dst)
 
-    # Find common root prefix
     all_pkgs = list({
         _get(t, "package", default="(default)")
         for t in type_info.values()
@@ -307,7 +368,6 @@ def _summarize_component(
             return rel if rel else "(root)"
         return pkg.rsplit(".", 1)[-1]
 
-    # Group by package
     pkg_to_tids: Dict[str, list] = _dd(list)
     for tid in type_info:
         pkg = _get(type_info[tid], "package", default="(default)")
@@ -365,30 +425,328 @@ def _summarize_component(
     return "\n".join(lines)
 
 
+def _summarize_activity(
+    type_info: Dict[str, Any],
+    type_names: Dict[str, str],
+    nodes_by_id: Dict[str, Any],
+    edges: List[Dict[str, Any]],
+    outgoing: DefaultDict[str, List[Tuple[str, str]]],
+) -> str:
+    """
+    Build a rich activity-diagram context for the LLM.
+
+    Emits:
+      - Architectural component lanes with their classification
+      - Ordered CALLS chains extracted from CIR edges
+      - Method signatures with parameter types and return types
+      - Guard / loop / action classification hints
+      - A concise CRITICAL RULES block reminding the LLM about the
+        swimlane-vs-structured-block constraint
+    """
+
+    # ── Index methods ──────────────────────────────────────────────────────
+    method_owner: Dict[str, str] = {}       # method_id → type_id
+    methods_by_type: Dict[str, List[Dict[str, Any]]] = {t: [] for t in type_info}
+    method_attrs: Dict[str, Dict[str, Any]] = {}
+
+    for e in edges:
+        if e.get("type") == "HAS_METHOD":
+            src, dst = e.get("src"), e.get("dst")
+            if src in type_info and dst in nodes_by_id:
+                ma = dict(nodes_by_id[dst].get("attrs", {}))
+                ma["_id"] = dst
+                methods_by_type.setdefault(src, []).append(ma)
+                method_owner[dst] = src
+                method_attrs[dst] = ma
+
+    # ── Index parameters ───────────────────────────────────────────────────
+    params_by_method: Dict[str, List[Dict[str, Any]]] = {}
+    for e in edges:
+        if e.get("type") == "PARAM_OF":
+            pid, mid = e.get("src"), e.get("dst")
+            if pid and mid:
+                pn = nodes_by_id.get(pid)
+                if pn and pn.get("kind") == "Parameter":
+                    params_by_method.setdefault(mid, []).append(pn.get("attrs", {}))
+
+    # ── Index CALLS edges (ordered) ────────────────────────────────────────
+    calls_raw: List[Dict[str, Any]] = []
+    for e in edges:
+        if e.get("type") != "CALLS":
+            continue
+        src_m, dst_m = e.get("src"), e.get("dst")
+        if not src_m or not dst_m:
+            continue
+        dst_nm = (nodes_by_id.get(dst_m) or {}).get("attrs", {}).get("name", "")
+        if _is_dunder(dst_nm):
+            continue
+        order = (e.get("attrs") or {}).get("order", 0)
+        calls_raw.append({"src": src_m, "dst": dst_m, "order": order})
+
+    calls_raw.sort(key=lambda x: x.get("order", 0))
+
+    # ── Exclude pure model types ───────────────────────────────────────────
+    excluded: Set[str] = set()
+    for tid, attrs in type_info.items():
+        nm  = _get(attrs, "name",    default="")
+        pkg = _get(attrs, "package", default="")
+        ms  = methods_by_type.get(tid, [])
+        if _is_pure_model(nm, pkg, ms):
+            excluded.add(tid)
+
+    active_types = {t: a for t, a in type_info.items() if t not in excluded}
+
+    def _participant_lane(tid: str) -> str:
+        a   = type_info[tid]
+        nm  = (_get(a, "name",    default="") or "").lower()
+        pkg = (_get(a, "package", default="") or "").lower()
+        combined = nm + " " + pkg
+        if any(k in combined for k in ("controller", "resource", "endpoint", "rest", "handler")):
+            return "Controller"
+        if any(k in combined for k in ("service", "manager", "interactor", "usecase", "business", "facade")):
+            return "Service"
+        if any(k in combined for k in ("dao", "repository", "repo", "persistence", "store", "gateway")):
+            return "Repository"
+        if any(k in combined for k in ("database", "db")):
+            return "Database"
+        if any(k in combined for k in ("util", "helper", "config")):
+            return "Utility"
+        return "System"
+
+    def _is_list_return(mid: str) -> bool:
+        ma = method_attrs.get(mid, {})
+        rt = (ma.get("raw_return_type") or ma.get("return_type") or "").lower()
+        return any(k in rt for k in ("list", "collection", "set", "iterable", "[]", "array"))
+
+    def _is_bool_return(mid: str) -> bool:
+        ma = method_attrs.get(mid, {})
+        rt = _clean_type_short(ma.get("raw_return_type") or ma.get("return_type") or "")
+        return rt.lower() in ("boolean", "bool")
+
+    def _is_optional_return(mid: str) -> bool:
+        ma = method_attrs.get(mid, {})
+        rt = (ma.get("raw_return_type") or ma.get("return_type") or "").lower()
+        return "optional" in rt
+
+    def _is_guard(mid: str) -> bool:
+        ma   = method_attrs.get(mid, {})
+        name = (ma.get("name") or "").lower()
+        _GUARD_PFXS = ("validate", "check", "verify", "ensure", "assert",
+                       "exists", "existsby", "is", "has", "can", "allow")
+        if _is_bool_return(mid) or _is_optional_return(mid):
+            return True
+        return any(name.startswith(p) for p in _GUARD_PFXS)
+
+    def _fmt_params(mid: str, max_p: int = 3) -> str:
+        params = params_by_method.get(mid, [])[:max_p]
+        parts: List[str] = []
+        for p in params:
+            pn = p.get("name", "")
+            pt = _clean_type_short(p.get("raw_type") or p.get("type_name") or "")
+            if pn and pt:
+                parts.append(f"{pn}: {pt}")
+            elif pn:
+                parts.append(pn)
+        suffix = ", ..." if len(params_by_method.get(mid, [])) > max_p else ""
+        return ", ".join(parts) + suffix
+
+    def _fmt_return(mid: str) -> str:
+        ma = method_attrs.get(mid, {})
+        rt = _clean_type_short(ma.get("raw_return_type") or ma.get("return_type") or "void")
+        return rt or "void"
+
+    def _guard_label(mid: str) -> str:
+        """Human-readable condition question for diamond nodes."""
+        ma   = method_attrs.get(mid, {})
+        name = ma.get("name") or ""
+        nl   = name.lower()
+
+        if _is_optional_return(mid):
+            subject = re.sub(
+                r"^(?:findBy|getBy|loadBy|fetchBy|searchBy|find|get|load|fetch|lookup|query|retrieve)",
+                "", name
+            ).strip()
+            if subject:
+                subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+            else:
+                subject = "result"
+            return f"{subject} found?"
+
+        prefix_map = [
+            ("existsby", "exists?"), ("exists", "exists?"),
+            ("validateby", "valid?"), ("validate", "valid?"),
+            ("verifyby", "valid?"), ("verify", "valid?"),
+            ("checkby", "correct?"), ("check", "correct?"),
+            ("ensure", "satisfied?"), ("has", "?"), ("is", "?"),
+            ("can", "?"), ("allow", " allowed?"),
+        ]
+        for prefix, suffix in prefix_map:
+            if nl.startswith(prefix):
+                subject = name[len(prefix):]
+                if not subject:
+                    subject = name
+                subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+                return f"{subject}{suffix}"
+
+        return f"{name}?"
+
+    # ── Build ordered call chain ───────────────────────────────────────────
+    # Group calls by (src_type layer, earliest call order) for coherent flow
+    src_layer_info: Dict[str, Tuple[int, int]] = {}
+    calls_by_src: Dict[str, List[Dict[str, Any]]] = {}
+    for c in calls_raw:
+        src_m = c["src"]
+        src_t = method_owner.get(src_m)
+        if not src_t or src_t not in active_types:
+            continue
+        ma = method_attrs.get(src_m, {})
+        if ma.get("visibility", "public") == "private":
+            continue
+        nm = ma.get("name", "")
+        if nm.startswith("_") and not nm.startswith("__"):
+            continue
+        layer = _layer_order(
+            _get(type_info[src_t], "name", default=""),
+            _get(type_info[src_t], "package", default=""),
+        )
+        calls_by_src.setdefault(src_m, []).append(c)
+        prev = src_layer_info.get(src_m, (layer, c["order"]))
+        src_layer_info[src_m] = (prev[0], min(prev[1], c["order"]))
+
+    sorted_callers = sorted(src_layer_info.keys(), key=lambda m: src_layer_info[m])
+
+    ordered_calls: List[Dict[str, Any]] = []
+    seen_pairs: Set[Tuple[str, str]] = set()
+    for src_m in sorted_callers:
+        for c in sorted(calls_by_src.get(src_m, []), key=lambda x: x["order"]):
+            dst_m = c["dst"]
+            dst_t = method_owner.get(dst_m)
+            if not dst_t or dst_t not in active_types:
+                continue
+            dst_ma = method_attrs.get(dst_m, {})
+            if dst_ma.get("visibility", "public") == "private":
+                continue
+            dst_nm = dst_ma.get("name", "")
+            if dst_nm.startswith("_") and not dst_nm.startswith("__"):
+                continue
+            pair = (src_m, dst_m)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            ordered_calls.append({
+                "src_method": src_m,
+                "dst_method": dst_m,
+                "src_type":   method_owner.get(src_m, ""),
+                "dst_type":   dst_t,
+            })
+
+    # ── Build context text ─────────────────────────────────────────────────
+    lines: List[str] = ["ACTIVITY DIAGRAM CONTEXT", ""]
+
+    # Lane classification
+    lines.append("ARCHITECTURAL COMPONENTS (swimlane classification):")
+    sorted_tids = sorted(
+        active_types.keys(),
+        key=lambda t: _layer_order(
+            _get(type_info[t], "name", default=""),
+            _get(type_info[t], "package", default=""),
+        ),
+    )
+    for tid in sorted_tids:
+        nm   = _get(type_info[tid], "name",    default=tid)
+        pkg  = _get(type_info[tid], "package", default="(default)")
+        lane = _participant_lane(tid)
+        lines.append(f"  [{nm}]  lane={lane}  package={pkg}")
+    lines.append("")
+
+    if ordered_calls:
+        lines.append("ORDERED METHOD CALL CHAIN (follow this sequence for the flow):")
+        lines.append("  Format: CallerType → CallerMethod  calls  CalleeType.calleeMethod(params) : ReturnType")
+        lines.append("  Hint:   [GUARD]  = decision diamond (if/else)    [LOOP] = repeat while    [ACTION] = plain step")
+        lines.append("")
+        for i, c in enumerate(ordered_calls, 1):
+            src_t  = c["src_type"]
+            dst_t  = c["dst_type"]
+            src_nm = _get(type_info.get(src_t, {}), "name", default=src_t)
+            dst_nm = _get(type_info.get(dst_t, {}), "name", default=dst_t)
+            src_ma = method_attrs.get(c["src_method"], {})
+            dst_ma = method_attrs.get(c["dst_method"], {})
+            src_mname = src_ma.get("name", "?")
+            dst_mname = dst_ma.get("name", "?")
+            params    = _fmt_params(c["dst_method"])
+            ret       = _fmt_return(c["dst_method"])
+            mid       = c["dst_method"]
+
+            hint = "[ACTION]"
+            if _is_list_return(mid):
+                hint = "[LOOP]  → use: repeat / repeat while (more items?) is (yes) -> no;"
+            elif _is_guard(mid):
+                guard_q = _guard_label(mid)
+                hint = f'[GUARD] → use: if ({guard_q}) then (yes) ... else (no) ... endif'
+
+            lines.append(f"  {i:2}. {src_nm}.{src_mname}  →  {dst_nm}.{dst_mname}({params}) : {ret}")
+            lines.append(f"       {hint}")
+
+        lines.append("")
+        lines.append("SWIMLANE ORDER (top-to-bottom, same as call chain above):")
+        seen_lanes: List[str] = []
+        for c in ordered_calls:
+            lane = _participant_lane(c["dst_type"])
+            if lane not in seen_lanes:
+                seen_lanes.append(lane)
+        for lane in seen_lanes:
+            lines.append(f"  |{lane}|")
+
+    else:
+        # Fallback: no CALLS data — emit flat method listing per type
+        lines.append("NO CALL CHAIN DATA AVAILABLE — emit flat method listing per swimlane:")
+        lines.append("")
+        for tid in sorted_tids:
+            nm   = _get(type_info[tid], "name", default=tid)
+            lane = _participant_lane(tid)
+            ms   = [m for m in methods_by_type.get(tid, [])
+                    if not m.get("is_constructor")
+                    and not _is_dunder(m.get("name", ""))
+                    and m.get("visibility", "public") != "private"
+                    and not any(m.get("name", "").startswith(p) for p in _TRIVIAL_PFXS)
+                    and m.get("name", "").lower() not in _TRIVIAL_NAMES]
+            if not ms:
+                continue
+            lines.append(f"  LANE |{lane}| — type: {nm}")
+            for m in ms[:6]:
+                mname  = m.get("name", "?")
+                mid    = m.get("_id", "")
+                params = _fmt_params(mid)
+                ret    = _fmt_return(mid)
+                hint   = ""
+                if _is_list_return(mid):
+                    hint = "  [LOOP]"
+                elif _is_guard(mid):
+                    hint = f"  [GUARD → if ({_guard_label(mid)}) then (yes) ... else (no) ... endif]"
+                lines.append(f"    :   {nm}.{mname}({params}) : {ret}{hint}")
+            lines.append("")
+
+    lines.append("")
+    lines.append("CRITICAL RULES FOR ACTIVITY DIAGRAM GENERATION:")
+    lines.append("  1. start and stop are required.")
+    lines.append("  2. NEVER mix swimlane markers (|Lane|) with if/repeat/fork blocks.")
+    lines.append("     Use swimlanes only when the entire diagram is flat (no structured blocks),")
+    lines.append("     OR use no swimlanes and structured blocks only.")
+    lines.append("  3. Action labels must NOT contain < > or | — replace with ( ) and /.")
+    lines.append("  4. Use 'ClassName.methodName(params)' format in :action; labels.")
+    lines.append("  5. Guards wrap calls annotated [GUARD]; loops wrap calls annotated [LOOP].")
+    lines.append("  6. Follow the call chain order above for the diagram flow.")
+
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Main public function
+# ─────────────────────────────────────────────────────────────────────────────
+
 def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
     """
     Converts a CIR dict into a rich, deterministic text context for the LLM.
-
-    For CLASS diagrams, each class gets a full member listing with:
-      - Visibility symbols  (+  -  #  ~)
-      - Field names and their full raw types  (e.g. items: List[Product])
-      - Method signatures with typed parameters and return type
-        (e.g. checkout(amount: float, currency: str) : bool)
-      - {abstract} / {static} modifiers
-      - Multiplicity hints on fields (1..*, 0..1, etc.)
-
-    Example output for a single class:
-
-        - CreditCard (kind: class, package: shop)
-          FIELDS:
-          - +card_number : str
-          - +holder_name : str
-          - -__expiry : str
-          - #_balance : float
-          METHODS:
-          - +charge(amount: float, currency: str) : bool
-          - +refund(transaction_id: str) : bool
-          - +get_balance() : float
     """
     nodes: List[Dict[str, Any]] = cir.get("nodes", []) or []
     edges: List[Dict[str, Any]] = cir.get("edges", []) or []
@@ -400,8 +758,8 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
     outgoing, incoming = _build_edge_maps(edges)
 
     # ── 1. Index TypeDecl nodes ───────────────────────────────────────────────
-    type_info:  Dict[str, Dict[str, Any]] = {}   # type_id → attrs
-    type_names: Dict[str, str]            = {}   # type_id → short name
+    type_info:  Dict[str, Dict[str, Any]] = {}
+    type_names: Dict[str, str]            = {}
 
     for n in nodes:
         if n.get("kind") != "TypeDecl":
@@ -416,24 +774,24 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
     is_class_diagram     = dt in ("class", "class diagram", "class_diagram")
     is_package_diagram   = dt in ("package", "package diagram")
     is_component_diagram = dt in ("component", "component diagram")
+    is_activity_diagram  = dt in ("activity", "activity diagram")
 
-    # ── Package diagram: type-level context matching rule-based standard ───────
+    # ── Package diagram ────────────────────────────────────────────────────────
     if is_package_diagram:
         return _summarize_package(type_info, type_names, edges)
 
-    # ── Component diagram: individual-class context with alias notation ────────
+    # ── Component diagram ──────────────────────────────────────────────────────
     if is_component_diagram:
         return _summarize_component(type_info, type_names, edges, outgoing, nodes_by_id)
 
-    # ── 2. For class diagrams: collect fields and methods per type ────────────
-    # We resolve ownership strictly via HAS_FIELD / HAS_METHOD edges
-    # (the python_adapter always emits these; no guessing needed).
+    # ── Activity diagram ───────────────────────────────────────────────────────
+    if is_activity_diagram:
+        return _summarize_activity(type_info, type_names, nodes_by_id, edges, outgoing)
 
+    # ── 2. For class diagrams: collect fields and methods per type ────────────
     fields_by_type:  DefaultDict[str, List[str]] = defaultdict(list)
     methods_by_type: DefaultDict[str, List[str]] = defaultdict(list)
 
-    # Build method_id → params lookup from PARAM_OF edges
-    # PARAM_OF: param_node --PARAM_OF--> method_node  (param is src, method is dst)
     params_for_method: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
     if is_class_diagram:
         for n in nodes:
@@ -442,14 +800,13 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
             nid = _s(n.get("id"))
             if not nid:
                 continue
-            # find outgoing PARAM_OF edges from this param node
             for etype, dst in outgoing.get(nid, []):
                 if etype == "PARAM_OF":
                     params_for_method[dst].append(n)
 
     if is_class_diagram:
         for type_id in type_info:
-            # ── Fields ──────────────────────────────────────────────────────
+            # Fields
             for etype, field_id in outgoing.get(type_id, []):
                 if etype != "HAS_FIELD":
                     continue
@@ -468,19 +825,14 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
                     continue
 
                 sym = _vis_symbol(vis)
-
-                # Build modifier prefix
                 mod_parts: List[str] = []
                 if is_static:
                     mod_parts.append("{static}")
-
                 mod_prefix = " ".join(mod_parts)
                 if mod_prefix:
                     mod_prefix += " "
 
                 display_type = _clean_type(raw_type) or "Any"
-
-                # Append multiplicity hint if non-trivial
                 mult_suffix = ""
                 if mult and mult not in ("1", ""):
                     mult_suffix = f"  [{mult}]"
@@ -489,7 +841,7 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
                     f"{sym}{mod_prefix}{fname} : {display_type}{mult_suffix}"
                 )
 
-            # ── Methods ─────────────────────────────────────────────────────
+            # Methods
             for etype, method_id in outgoing.get(type_id, []):
                 if etype != "HAS_METHOD":
                     continue
@@ -507,13 +859,10 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
 
                 if not mname:
                     continue
-                # Skip constructors from the method list
                 if is_ctor:
                     continue
 
-                # Build method signature
                 sym = _vis_symbol(vis)
-
                 mod_parts = []
                 if is_abstract or "abstract" in mods:
                     mod_parts.append("{abstract}")
@@ -523,7 +872,6 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
                 if mod_prefix:
                     mod_prefix += " "
 
-                # Collect parameters from PARAM_OF edges
                 param_nodes = params_for_method.get(method_id, [])
                 param_strs: List[str] = []
                 for pn in param_nodes:

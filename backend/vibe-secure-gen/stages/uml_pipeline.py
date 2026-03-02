@@ -400,8 +400,8 @@ def _cir_to_uml_ai(
 
         lines_count = plantuml.count("\n") + 1 if plantuml.strip() else 0
 
-        if not ok_flag or not plantuml.strip():
-            _warn("LLM output invalid or empty",
+        if not plantuml.strip():
+            _warn("LLM output empty",
                   f"{gen_time}  ·  {len(errs)} error(s)")
             for e_msg in errs[:3]:
                 _sub(f"  {e_msg}", indent=8)
@@ -409,8 +409,15 @@ def _cir_to_uml_ai(
             _divider()
             continue
 
-        _ok("PlantUML generated",
-            f"{lines_count} lines  ·  LLM inference  ·  {gen_time}")
+        # Log a soft warning if ok_flag is False but we still have content
+        if not ok_flag:
+            _warn("LLM validation warnings (attempting render anyway)",
+                  f"{gen_time}  ·  {len(errs)} error(s)")
+            for e_msg in errs[:3]:
+                _sub(f"  {e_msg}", indent=8)
+        else:
+            _ok("PlantUML generated",
+                f"{lines_count} lines  ·  LLM inference  ·  {gen_time}")
 
         # ── SVG render ────────────────────────────────────────────────────────
         _info("POST /render/svg", f"uml-renderer :7090  →  {RENDER_URL}")
@@ -625,9 +632,8 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 "package_svg":   uml_rule.get("package_svg"),
                 "sequence_svg":  uml_rule.get("sequence_svg"),
                 "component_svg": uml_rule.get("component_svg"),
-                "activity_svg":  uml_rule.get("activity_svg"), 
+                "activity_svg":  uml_rule.get("activity_svg"),
                 "validation":    uml_rule.get("validation", {}),
-                # Both pipelines for comparison view
                 "rule_based":    uml_rule,
                 "ai":            uml_ai,
             }
@@ -657,7 +663,7 @@ def _error_result(msg: str, file_count: int = 0) -> Dict[str, Any]:
         "package_svg":   None,
         "sequence_svg":  None,
         "component_svg": None,
-        "activity_svg":  None, 
+        "activity_svg":  None,
         "validation":    {},
         "rule_based":    {},
         "ai":            {},

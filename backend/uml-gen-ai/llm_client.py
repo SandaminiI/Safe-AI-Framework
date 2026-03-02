@@ -2,7 +2,7 @@
 """
 Gemini LLM client for PlantUML generation.
 
-All four diagram types are standardized to match the rule-based generator exactly:
+All five diagram types are standardized to match the rule-based generator exactly:
 
 CLASS     — skinparam classAttributeIconSize 0, set namespaceSeparator .,
             +/-/#/~ visibility, typed fields/methods, no constructors, flat layout
@@ -14,14 +14,17 @@ SEQUENCE  — sequenceArrowThickness 2, roundcorner 5, responseMessageBelowArrow
 COMPONENT — componentStyle uml2, defaultTextAlignment center, shadowing false,
             left to right direction, [Component] brackets, () lollipop interfaces,
             <<Stereotype>> package labels, assembly connectors
+ACTIVITY  — shadowing false, activityBorderColor / BackgroundColor skinparams,
+            start/stop, swimlane markers OR if/repeat/fork (NEVER mixed),
+            :action; nodes with ClassName.method(params) format
 """
 from __future__ import annotations
 
 import os
 from typing import Literal
 
-from dotenv import load_dotenv # type: ignore
-import google.generativeai as genai # type: ignore
+from dotenv import load_dotenv  # type: ignore
+import google.generativeai as genai  # type: ignore
 
 load_dotenv()
 
@@ -304,12 +307,101 @@ CRITICAL DO-NOT:
   8. Do NOT use ..|> or --|> inside a component diagram — use --> arrows with labels only.
 """.strip()
 
+_ACTIVITY_SYSTEM = _BASE_SYSTEM + """
+
+DIAGRAM TYPE: ACTIVITY
+
+MANDATORY HEADER — copy these lines EXACTLY after @startuml:
+
+  skinparam shadowing               false
+  skinparam activityBorderColor     #000000
+  skinparam activityBackgroundColor #ffffff
+  skinparam activityFontColor       #000000
+  skinparam activityFontSize        13
+  skinparam arrowColor              #000000
+  skinparam ActivityDiamondBorderColor #000000
+  skinparam ActivityDiamondBackgroundColor #ffffff
+  skinparam ActivityDiamondFontColor #000000
+
+FLOW CONTROL CONSTRUCTS:
+
+1. Basic action node (use ClassName.methodName format):
+   :ServiceName.methodName(param: Type);
+
+2. Decision diamond (for guard / validation / boolean / Optional return):
+   if (condition?) then (yes)
+     :handle success;
+   else (no)
+     :handle error / return;
+   endif
+
+3. Collection loop (for list/array/collection return):
+   repeat
+     :process each item;
+   repeat while (more items?) is (yes) -> no;
+
+4. Parallel fork (for independent concurrent steps):
+   fork
+     :step A;
+   fork again
+     :step B;
+   end fork
+
+SWIMLANE MODE (use ONLY when the diagram has NO if/repeat/fork blocks):
+  |ComponentName|
+  :action in this lane;
+  |AnotherComponent|
+  :action in other lane;
+
+NO-SWIMLANE MODE (use when diagram HAS if/repeat/fork structured blocks):
+  Prefix action labels with component name: :ServiceName.method();
+  Do NOT use any |Lane| markers anywhere in this mode.
+
+PARTICIPANT LANE CLASSIFICATION:
+  Controllers / REST endpoints     → |Controller|
+  Services / Managers / Facades    → |Service|
+  DAOs / Repositories              → |Repository|
+  Database utilities               → |Database|
+  Utility / Helper classes         → |Utility|
+  Other                            → |System|
+
+GUARD LABEL CONVENTIONS — keep short and readable:
+  validateInput()    → if (input valid?) then (yes)
+  existsByUsername() → if (username exists?) then (yes)
+  findById()         → if (record found?) then (yes)
+  checkPassword()    → if (password correct?) then (yes)
+  isActive()         → if (active?) then (yes)
+  Optional<T> return → if (<entity> found?) then (yes)
+
+ORDERING:
+  1. start at entry point (controller layer).
+  2. Follow the provided call chain from top to bottom.
+  3. Guards/validations come BEFORE the main action they protect.
+  4. Loop nodes wrap collection-returning calls.
+
+CRITICAL DO-NOT:
+  1. NEVER mix swimlane markers (|Lane|) with if/repeat/fork blocks in the same diagram.
+     WRONG: |ServiceA|
+            if (valid?) then (yes)
+              |ServiceB|          ← lane switch INSIDE structured block = CRASH
+     RIGHT option A: flat swimlanes with plain :action; nodes only.
+     RIGHT option B: no swimlanes with if/repeat/fork blocks; prefix actions with class name.
+  2. Do NOT use < > or | inside action labels — replace with ( ) and /.
+  3. Do NOT include field declarations or class structure.
+  4. start and stop MUST be present.
+  5. Every if must have endif. Every repeat must have repeat while.
+  6. Do NOT produce an empty or trivial diagram — use ALL calls from the context.
+""".strip()
+
 
 def _system_for(diagram_type: str) -> str:
     dt = (diagram_type or "class").lower().strip()
-    return {"package": _PACKAGE_SYSTEM,
-            "sequence": _SEQUENCE_SYSTEM,
-            "component": _COMPONENT_SYSTEM}.get(dt, _CLASS_SYSTEM)
+    return {
+        "package":   _PACKAGE_SYSTEM,
+        "sequence":  _SEQUENCE_SYSTEM,
+        "component": _COMPONENT_SYSTEM,
+        "activity":  _ACTIVITY_SYSTEM,
+    }.get(dt, _CLASS_SYSTEM)
 
 
 # =============================================================================
@@ -407,11 +499,52 @@ RULES (violations = wrong diagram):
 - NO ..|> or --|> arrows — only --> with a label.
 """.strip()
 
+_ACTIVITY_REMINDER = """
+[ACTIVITY DIAGRAM REMINDER]
+Output MUST begin:
+  @startuml
+
+  skinparam shadowing               false
+  skinparam activityBorderColor     #000000
+  skinparam activityBackgroundColor #ffffff
+  skinparam activityFontColor       #000000
+  skinparam activityFontSize        13
+  skinparam arrowColor              #000000
+  skinparam ActivityDiamondBorderColor #000000
+  skinparam ActivityDiamondBackgroundColor #ffffff
+  skinparam ActivityDiamondFontColor #000000
+
+ABSOLUTE RULE — NEVER mix swimlane markers with structured blocks:
+  WRONG:  |ServiceA|
+          if (valid?) then (yes)
+            |ServiceB|         ← lane switch INSIDE if = CRASH
+          endif
+  CORRECT option A (flat swimlanes, no if/repeat/fork):
+          |ServiceA|
+          :validate input;
+          |ServiceB|
+          :persist entity;
+  CORRECT option B (no swimlanes, with structured blocks):
+          if (valid?) then (yes)
+            :ServiceB.persist(entity);
+          else (no)
+            :return error;
+          endif
+
+- start and stop are REQUIRED.
+- Action labels must NOT contain < > or | — use ( ) and /.
+- Use 'ClassName.method(params)' format in :action; labels.
+- [GUARD] calls → if (...) then (yes) ... else (no) ... endif
+- [LOOP] calls  → repeat ... repeat while (more items?) is (yes) -> no;
+- Follow the ORDERED CALL CHAIN from the context exactly.
+""".strip()
+
 _REMINDERS = {
     "class":     _CLASS_REMINDER,
     "package":   _PACKAGE_REMINDER,
     "sequence":  _SEQUENCE_REMINDER,
     "component": _COMPONENT_REMINDER,
+    "activity":  _ACTIVITY_REMINDER,
 }
 
 
@@ -457,7 +590,6 @@ def _inject_after_startuml(plantuml: str, lines_to_inject: list) -> str:
 def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
     import re as _re
 
-    # Quick guard — only process if actual nesting exists
     if not _re.search(
         r'package\s+"[^"]+"\s*\{[^}]*package\s+"[^"]+"\s*\{',
         plantuml, _re.DOTALL
@@ -472,7 +604,6 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
     header_end = start_m.end()
     body       = plantuml[header_end:end_m.start()]
 
-    # ── Separate skinparam/comment header lines from package/arrow body ────────
     header_lines  = []
     content_lines = []
     in_skinparam  = False
@@ -498,7 +629,6 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
 
     content = "\n".join(content_lines)
 
-    # ── Recursive parser: collect {generated_fqn -> [type_lines]} + arrows ────
     pkg_types:  dict = {}
     arrow_lines = []
 
@@ -510,7 +640,6 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
             raw = lines[i]
             s   = raw.strip()
 
-            # Package block — quoted or unquoted name, optional stereotype
             pm = _re.match(
                 r'^package\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+?))\s*(?:<<[^>]*>>)?\s*\{',
                 s
@@ -520,14 +649,12 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                 new_pfx  = f"{prefix}.{pkg_name}" if prefix else pkg_name
                 open_ct  = s.count("{")
                 close_ct = s.count("}")
-                # Single-line block: package "name" { ... } on one line
                 if open_ct == close_ct and open_ct > 0:
                     inner_m = _re.search(r'\{(.*)\}', s)
                     if inner_m:
                         _parse(inner_m.group(1).strip(), new_pfx)
                     i += 1
                     continue
-                # Multi-line block: collect until matching closing brace
                 depth = open_ct - close_ct
                 j = i + 1
                 block = []
@@ -542,7 +669,6 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                 i = j
                 continue
 
-            # Type declaration without body
             tm = _re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*$', s)
             if tm:
                 key = prefix or "(default)"
@@ -550,7 +676,6 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                 i += 1
                 continue
 
-            # Type declaration WITH body — strip body, keep keyword+name
             tbm = _re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*\{', s)
             if tbm:
                 key = prefix or "(default)"
@@ -562,7 +687,6 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                     i += 1
                 continue
 
-            # Relationship arrows — all PlantUML variants (-->, ..>, ..|>, --|>, etc.)
             if s and not s.startswith("'"):
                 if _re.search(r'(-{2,}|\.{2,})[|><!]|[|><!](-{2,}|\.{2,})', s):
                     arrow_lines.append(s)
@@ -570,23 +694,18 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
 
     _parse(content, "")
 
-    # ── FQN remapping: fix shortened names using known_fqns from CIR ──────────
-    # Build suffix → canonical_fqn lookup from longest suffix to shortest
-    # so "bankmanagementsystem.controller" beats "controller" if both match.
     fqn_remap: dict = {}
     if known_fqns:
         for fqn in known_fqns:
             parts = fqn.split(".")
             for length in range(1, len(parts) + 1):
                 suffix = ".".join(parts[-length:])
-                # Longer suffix wins over shorter (more specific match)
                 if suffix not in fqn_remap or len(fqn) > len(fqn_remap[suffix]):
                     fqn_remap[suffix] = fqn
 
     def _remap(pkg: str) -> str:
         return fqn_remap.get(pkg, pkg)
 
-    # ── Rebuild flat output ────────────────────────────────────────────────────
     out = [plantuml[:header_end].rstrip(), ""]
     prev_blank = True
     for hl in header_lines:
@@ -617,25 +736,8 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
 
 
 def _fix_component_assembly_connectors(plantuml: str) -> str:
-    """
-    Deterministically enforce assembly connectors in component diagrams.
-
-    The rule-based generator always writes:
-        [ComponentName] as alias
-        () "ComponentName" as I_alias
-        alias - I_alias          ← THIS line is what Gemini frequently omits
-
-    Without the 'alias - I_alias' line PlantUML renders the lollipop as a
-    giant standalone interface symbol (as seen in Image 2) instead of a small
-    circle attached to the component.
-
-    Strategy: scan every () lollipop declaration, find its matching [Name]
-    component alias, then inject the assembly connector on the very next line
-    if it is absent anywhere in the diagram.
-    """
     import re as _re
 
-    # Build name → component-alias map from all [Name] as alias lines
     comp_aliases: dict = {}
     for line in plantuml.splitlines():
         m = _re.search(r'\[([^\]]+)\]\s+as\s+(\w+)', line)
@@ -653,9 +755,104 @@ def _fix_component_assembly_connectors(plantuml: str) -> str:
             if comp_alias:
                 connector = f"{comp_alias} - {ialias}"
                 if connector not in plantuml:
-                    # Inject with same indentation as the lollipop line
                     indent = len(line) - len(line.lstrip())
                     result.append(" " * indent + connector)
+
+    return "\n".join(result)
+
+
+def _fix_activity_diagram(plantuml: str) -> str:
+    """
+    Post-process activity diagrams to fix common Gemini mistakes:
+
+    1. Remove swimlane markers that appear inside if/repeat/fork blocks.
+       (These crash the PlantUML renderer.)
+    2. Ensure start/stop are present.
+    3. Escape forbidden characters in action labels (< > →  ← |).
+    4. Balance unclosed if/repeat blocks by appending endif/end.
+    """
+    import re as _re
+
+    lines = plantuml.splitlines()
+    result: list = []
+
+    # ── Pass 1: detect if structured blocks exist anywhere ────────────────────
+    has_structured = any(
+        _re.match(r'\s*(if\s*\(|repeat\b|fork\b)', ln, _re.IGNORECASE)
+        for ln in lines
+    )
+
+    # ── Pass 2: remove swimlane markers if structured blocks present ──────────
+    depth = 0          # nesting depth inside if/repeat/fork
+    open_keywords: list = []
+
+    for ln in lines:
+        s = ln.strip().lower()
+
+        # Track nesting open
+        if _re.match(r'if\s*\(', s):
+            depth += 1
+            open_keywords.append("if")
+        elif s.startswith("repeat") and not s.startswith("repeat while"):
+            depth += 1
+            open_keywords.append("repeat")
+        elif s.startswith("fork") and not s.startswith("fork again"):
+            depth += 1
+            open_keywords.append("fork")
+
+        # Track nesting close
+        elif s in ("endif", "end fork"):
+            depth = max(0, depth - 1)
+            if open_keywords:
+                open_keywords.pop()
+        elif _re.match(r'repeat\s+while\b', s):
+            depth = max(0, depth - 1)
+            if open_keywords:
+                open_keywords.pop()
+
+        # If we're inside a structured block AND this line is a swimlane marker,
+        # skip it (emit a comment so the diff is visible in debug output)
+        if depth > 0 and has_structured and _re.match(r'\|[^\|]+\|', ln.strip()):
+            result.append(f"' [auto-removed swimlane inside block]: {ln.strip()}")
+            continue
+
+        # Escape < and > inside :action; labels
+        if _re.match(r'\s*:[^;]+;', ln):
+            ln = _re.sub(r'<(\w)', r'(\1', ln)
+            ln = _re.sub(r'(\w)>', r'\1)', ln)
+            ln = ln.replace("|", "/")
+
+        result.append(ln)
+
+    # ── Pass 3: ensure start and stop ─────────────────────────────────────────
+    combined = "\n".join(result)
+    if "start" not in combined.lower():
+        # Insert start after the last skinparam line
+        new_result = []
+        inserted = False
+        for ln in result:
+            new_result.append(ln)
+            if not inserted and ln.strip().startswith("skinparam"):
+                # Keep going — insert after the last skinparam block
+                pass
+            if not inserted and ln.strip() and not ln.strip().startswith("skinparam") \
+                    and not ln.strip().startswith("@") and not ln.strip().startswith("'"):
+                new_result.insert(-1, "")
+                new_result.insert(-1, "start")
+                new_result.insert(-1, "")
+                inserted = True
+        result = new_result
+
+    if "stop" not in "\n".join(result).lower():
+        # Insert stop before @enduml
+        new_result = []
+        for ln in result:
+            if ln.strip().lower() == "@enduml":
+                new_result.append("")
+                new_result.append("stop")
+                new_result.append("")
+            new_result.append(ln)
+        result = new_result
 
     return "\n".join(result)
 
@@ -679,7 +876,6 @@ def _post_process(plantuml: str, diagram_type: str, known_fqns: list = None) -> 
             needed.append("skinparam shadowing            false")
         if needed:
             plantuml = _inject_after_startuml(plantuml, needed)
-        # Flatten any nested/shortened package blocks Gemini emits into flat FQN labels
         plantuml = _flatten_package_diagram(plantuml, known_fqns=known_fqns)
 
     elif dt == "sequence":
@@ -707,8 +903,32 @@ def _post_process(plantuml: str, diagram_type: str, known_fqns: list = None) -> 
             needed.append("left to right direction")
         if needed:
             plantuml = _inject_after_startuml(plantuml, needed)
-        # Always enforce assembly connectors — Gemini frequently omits alias - I_alias
         plantuml = _fix_component_assembly_connectors(plantuml)
+
+    elif dt == "activity":
+        needed = []
+        if "activityBorderColor" not in plantuml:
+            needed.append("skinparam activityBorderColor     #000000")
+        if "activityBackgroundColor" not in plantuml:
+            needed.append("skinparam activityBackgroundColor #ffffff")
+        if "activityFontColor" not in plantuml:
+            needed.append("skinparam activityFontColor       #000000")
+        if "activityFontSize" not in plantuml:
+            needed.append("skinparam activityFontSize        13")
+        if "arrowColor" not in plantuml:
+            needed.append("skinparam arrowColor              #000000")
+        if "ActivityDiamondBorderColor" not in plantuml:
+            needed.append("skinparam ActivityDiamondBorderColor #000000")
+        if "ActivityDiamondBackgroundColor" not in plantuml:
+            needed.append("skinparam ActivityDiamondBackgroundColor #ffffff")
+        if "ActivityDiamondFontColor" not in plantuml:
+            needed.append("skinparam ActivityDiamondFontColor #000000")
+        if "shadowing" not in plantuml:
+            needed.append("skinparam shadowing               false")
+        if needed:
+            plantuml = _inject_after_startuml(plantuml, needed)
+        # Fix swimlane/structured-block conflicts, escape labels, ensure start/stop
+        plantuml = _fix_activity_diagram(plantuml)
 
     return plantuml
 
@@ -718,11 +938,6 @@ def _post_process(plantuml: str, diagram_type: str, known_fqns: list = None) -> 
 # =============================================================================
 
 def _strip_package_blocks(plantuml: str) -> str:
-    """
-    Remove package/namespace wrapper blocks (brace-counting, handles nesting).
-    Keeps class/interface/abstract/enum definitions intact.
-    Only called for CLASS diagrams — package diagrams need the blocks.
-    """
     import re as _re
 
     def _remove_wrappers(text: str) -> str:
@@ -802,14 +1017,12 @@ def _extract_known_fqns(context: str) -> list:
     import re as _re
     fqns = set()
 
-    # Pattern 1: package "com.example.app.service" { lines in context
     for m in _re.finditer(
         r'package\s+"([a-zA-Z][a-zA-Z0-9._]*\.[a-zA-Z][a-zA-Z0-9._]*)"',
         context
     ):
         fqns.add(m.group(1).strip())
 
-    # Pattern 2: package: com.example.app.service  in type listing lines
     for m in _re.finditer(
         r'package:\s*([a-zA-Z][a-zA-Z0-9._]*\.[a-zA-Z][a-zA-Z0-9._]*)',
         context
@@ -821,7 +1034,7 @@ def _extract_known_fqns(context: str) -> list:
 
 def generate_plantuml_from_context(
     context: str,
-    diagram_type: Literal["class", "package", "sequence", "component"] = "class",
+    diagram_type: Literal["class", "package", "sequence", "component", "activity"] = "class",
 ) -> str:
     if not context or not context.strip():
         raise RuntimeError("No context provided for AI UML generation.")
@@ -829,7 +1042,6 @@ def generate_plantuml_from_context(
     dt     = (diagram_type or "class").lower().strip()
     prompt = _build_prompt(context, dt)
 
-    # Extract known FQNs from context for package diagram post-processing
     known_fqns = _extract_known_fqns(context) if dt == "package" else None
 
     model = genai.GenerativeModel(
