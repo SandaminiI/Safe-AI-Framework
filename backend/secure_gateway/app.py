@@ -24,6 +24,7 @@ from policy_engine import is_allowed
 from fastapi.middleware.cors import CORSMiddleware
 from station1_cert_verification import station1
 from station2_access_control import station2
+import color_logger as clog
 
 app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="1.0")
 
@@ -171,15 +172,10 @@ async def station1_verify_and_issue(req: Station1Request, db: Session = Depends(
     3. Calculate trust score based on history
     4. Issue JWT with intent-bound claims
     """
-    print(f"\n{'='*80}")
-    print(f"[STATION 1] Certificate Verification Request")
-    print(f"[STATION 1] Plugin ID: {req.plugin_id}")
-    print(f"[STATION 1] Intent: {req.intent}")
-    print(f"[STATION 1] Scope: {req.scope}")
-    print(f"{'='*80}\n")
+    clog.log_station1_request(req.plugin_id, req.intent, req.scope)
     
     if not req.certificate_pem:
-        print(f"[STATION 1] ✗ No certificate provided - redirecting to CA\n")
+        clog.log_station1_no_cert()
         return Station1Response(
             success=False,
             error="Certificate required. Please obtain certificate from CA first.",
@@ -196,17 +192,14 @@ async def station1_verify_and_issue(req: Station1Request, db: Session = Depends(
     )
     
     if not success:
-        print(f"[STATION 1] ✗ Certificate verification failed: {error}\n")
+        clog.log_station1_cert_failed(error)
         return Station1Response(
             success=False,
             error=error,
             redirect_to_ca="Certificate verification failed" in error
         )
     
-    print(f"[STATION 1] ✓ Certificate verified successfully")
-    print(f"[STATION 1] ✓ JWT issued with intent-bound claims")
-    print(f"[STATION 1] Trust Score: {result.get('trust_score')}")
-    print(f"[STATION 1] Plugin should now proceed to Station 2\n")
+    clog.log_station1_success(result.get('trust_score'))
     
     return Station1Response(
         success=True,
@@ -240,16 +233,12 @@ def station2_validate_access(req: Station2Request, request: Request, db: Session
     4. Check intent permissions for requested method
     5. Grant or deny core access
     """
-    print(f"\n{'='*80}")
-    print(f"[STATION 2] Access Validation Request")
-    print(f"[STATION 2] Method: {req.method}")
-    print(f"[STATION 2] Path: {req.path}")
-    print(f"{'='*80}\n")
+    clog.log_station2_request(req.method, req.path)
     
     # Extract JWT from Authorization header
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        print(f"[STATION 2] ✗ No Authorization header provided\n")
+        clog.log_station2_no_auth()
         return Station2Response(
             access_granted=False,
             error="Missing or invalid Authorization header. Expected: Bearer <jwt_token>"
@@ -266,18 +255,18 @@ def station2_validate_access(req: Station2Request, request: Request, db: Session
     )
     
     if not access_granted:
-        print(f"[STATION 2] ✗ Access DENIED: {error}\n")
+        clog.log_station2_denied(error)
         return Station2Response(
             access_granted=False,
             error=error
         )
     
-    print(f"[STATION 2] ✓ JWT validated successfully")
-    print(f"[STATION 2] ✓ Access GRANTED to core communication")
-    print(f"[STATION 2] Plugin ID: {context.get('plugin_id')}")
-    print(f"[STATION 2] Trust Score: {context.get('trust_score')}")
-    print(f"[STATION 2] Intent: {context.get('intent')}")
-    print(f"[STATION 2] Scope: {context.get('scope')}\n")
+    clog.log_station2_granted(
+        context.get('plugin_id'),
+        context.get('trust_score'),
+        context.get('intent'),
+        context.get('scope')
+    )
     
     return Station2Response(
         access_granted=True,
@@ -490,7 +479,7 @@ async def security_middleware(request: Request, call_next):
                 if not plugin:
                     raise HTTPException(status_code=401, detail="Plugin not found in database")
                 
-                print(f"[MIDDLEWARE] ✓ Plugin {plugin_id} authenticated via two-station flow")
+                clog.log_middleware_auth(plugin_id, "two-station")
                     
             except ValueError as e:
                 # Try legacy JWT validation for backward compatibility
@@ -503,7 +492,7 @@ async def security_middleware(request: Request, call_next):
                     if not allowed:
                         raise HTTPException(status_code=403, detail=reason)
                     
-                    print(f"[MIDDLEWARE] Plugin {plugin.plugin_id} authenticated via legacy JWT")
+                    clog.log_middleware_legacy(plugin.plugin_id)
                 except:
                     raise HTTPException(
                         status_code=401,
@@ -615,22 +604,19 @@ async def _ensure_plugin_authenticated(slug: str, db: Session) -> tuple:
             # Check if not expired (with 5 minute buffer)
             import datetime
             if payload.get("exp", 0) > datetime.datetime.now(datetime.timezone.utc).timestamp() + 300:
-                print(f"[AUTH] Plugin {slug} using cached JWT")
+                clog.log_flow_cached_jwt(slug)
                 return True, cached["jwt_token"], None
         except:
             # JWT expired or invalid, remove from cache
             del _plugin_jwt_cache[slug]
     
-    print(f"\n{'='*80}")
-    print(f"[SECURE GATEWAY] New Plugin Detected: {slug}")
-    print(f"[SECURE GATEWAY] Starting Two-Station Authentication Flow...")
-    print(f"{'='*80}\n")
+    clog.log_flow_header(slug)
     
     try:
         # ================================================================
         # STEP 1: Get certificate from CA Service
         # ================================================================
-        print(f"[FLOW] Step 1: Requesting certificate from CA Service for plugin '{slug}'...")
+        clog.log_flow_step(1, f"Requesting certificate from CA Service for plugin '{slug}'...")
         
         async with httpx.AsyncClient(timeout=10.0) as client:
             ca_response = await client.post(
@@ -643,20 +629,19 @@ async def _ensure_plugin_authenticated(slug: str, db: Session) -> tuple:
             
             if ca_response.status_code != 200:
                 error_msg = f"CA Service error: {ca_response.text}"
-                print(f"[FLOW] ✗ Step 1 FAILED: {error_msg}")
+                clog.log_flow_step_failed(1, error_msg)
                 return False, None, error_msg
             
             ca_data = ca_response.json()
             certificate_pem = ca_data.get("certificate_pem")
             serial_number = ca_data.get("serial_number")
             
-            print(f"[FLOW] ✓ Step 1 Complete: Certificate issued")
-            print(f"[FLOW]   Serial: {serial_number}")
+            clog.log_flow_step_success(1, "Certificate issued", {"Serial": serial_number})
         
         # ================================================================
         # STEP 2: Go to Station 1 with certificate to get JWT
         # ================================================================
-        print(f"[FLOW] Step 2: Station 1 - Verifying certificate and issuing JWT...")
+        clog.log_flow_step(2, "Station 1 - Verifying certificate and issuing JWT...")
         
         success, result, error = await station1.async_process_certificate_and_issue_jwt(
             plugin_id=slug,
@@ -667,19 +652,18 @@ async def _ensure_plugin_authenticated(slug: str, db: Session) -> tuple:
         )
         
         if not success:
-            print(f"[FLOW] ✗ Step 2 FAILED: {error}")
+            clog.log_flow_step_failed(2, error)
             return False, None, f"Station 1 error: {error}"
         
         jwt_token = result.get("jwt_token")
         trust_score = result.get("trust_score")
         
-        print(f"[FLOW] ✓ Step 2 Complete: JWT issued")
-        print(f"[FLOW]   Trust Score: {trust_score}")
+        clog.log_flow_step_success(2, "JWT issued", {"Trust Score": trust_score})
         
         # ================================================================
         # STEP 3: Validate JWT at Station 2
         # ================================================================
-        print(f"[FLOW] Step 3: Station 2 - Validating JWT for core access...")
+        clog.log_flow_step(3, "Station 2 - Validating JWT for core access...")
         
         access_granted, context, error = station2.validate_jwt_and_check_access(
             jwt_token=jwt_token,
@@ -689,13 +673,14 @@ async def _ensure_plugin_authenticated(slug: str, db: Session) -> tuple:
         )
         
         if not access_granted:
-            print(f"[FLOW] ✗ Step 3 FAILED: {error}")
+            clog.log_flow_step_failed(3, error)
             return False, None, f"Station 2 error: {error}"
         
-        print(f"[FLOW] ✓ Step 3 Complete: Access granted to core communication")
-        print(f"[FLOW]   Plugin ID: {context.get('plugin_id')}")
-        print(f"[FLOW]   Intent: {context.get('intent')}")
-        print(f"[FLOW]   Scope: {context.get('scope')}")
+        clog.log_flow_step_success(3, "Access granted to core communication", {
+            "Plugin ID": context.get('plugin_id'),
+            "Intent": context.get('intent'),
+            "Scope": context.get('scope')
+        })
         
         # ================================================================
         # STEP 4: Cache JWT for future requests
@@ -706,15 +691,12 @@ async def _ensure_plugin_authenticated(slug: str, db: Session) -> tuple:
             "certificate_serial": serial_number
         }
         
-        print(f"\n{'='*80}")
-        print(f"[SECURE GATEWAY] ✓ Two-Station Flow Complete for plugin '{slug}'")
-        print(f"[SECURE GATEWAY] Plugin can now communicate with core system")
-        print(f"{'='*80}\n")
+        clog.log_flow_complete(slug)
         
         return True, jwt_token, None
         
     except Exception as e:
-        print(f"[FLOW] ✗ Authentication flow error: {str(e)}")
+        clog.log_flow_error(str(e))
         return False, None, str(e)
 
 

@@ -16,6 +16,7 @@ from database import (
     engine, get_db, init_db, Base,
     IssuedCertificate, CertificateAuditLog, RevokedCertificate
 )
+import color_logger as clog
 
 UTC = timezone.utc
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,10 +28,7 @@ app = FastAPI(title="CA Service (Internal PKI)", version="2.0")
 @app.on_event("startup")
 def startup_event():
     init_db()
-    print(f"\n{'='*80}")
-    print("[CA SERVICE] Certificate Authority Service Started")
-    print("[CA SERVICE] Database: ca_service.db")
-    print(f"{'='*80}\n")
+    clog.log_startup()
 
 root_ca = load_or_create_root_ca(KEYS_DIR)
 
@@ -88,12 +86,7 @@ def get_root_ca():
 def issue_cert(req: IssueCertRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else "unknown"
     
-    print(f"\n{'='*80}")
-    print(f"[CA SERVICE] Certificate Request Received")
-    print(f"[CA SERVICE] Plugin ID: {req.plugin_id}")
-    print(f"[CA SERVICE] TTL Hours: {req.ttl_hours}")
-    print(f"[CA SERVICE] Client IP: {client_ip}")
-    print(f"{'='*80}\n")
+    clog.log_cert_request(req.plugin_id, req.ttl_hours, client_ip)
     
     try:
         plugin_key_pem, plugin_cert_pem, expires_at, serial_number = issue_plugin_cert(
@@ -125,11 +118,7 @@ def issue_cert(req: IssueCertRequest, request: Request, db: Session = Depends(ge
             ip_address=client_ip
         )
         
-        print(f"[CA SERVICE] ✓ Certificate Issued Successfully")
-        print(f"[CA SERVICE] Serial Number: {serial_number}")
-        print(f"[CA SERVICE] Expires At: {expires_at}")
-        print(f"[CA SERVICE] Stored in database: ca_service.db")
-        print(f"[CA SERVICE] Plugin should now go to Station 1 with this certificate\n")
+        clog.log_cert_issued(serial_number, expires_at)
         
         return IssueCertResponse(
             plugin_private_key_pem=plugin_key_pem,
@@ -165,9 +154,7 @@ def verify_cert(req: VerifyCertRequest, request: Request, db: Session = Depends(
     """
     client_ip = request.client.host if request.client else "unknown"
     
-    print(f"\n[CA SERVICE] Certificate Verification Request")
-    print(f"[CA SERVICE] Plugin ID: {req.plugin_id if req.plugin_id else 'Not specified'}")
-    print(f"[CA SERVICE] Client IP: {client_ip}")
+    clog.log_cert_verify_request(req.plugin_id, client_ip)
     
     try:
         is_valid, result = verify_certificate(
@@ -177,7 +164,7 @@ def verify_cert(req: VerifyCertRequest, request: Request, db: Session = Depends(
         )
         
         if not is_valid:
-            print(f"[CA SERVICE] ✗ Certificate Verification FAILED: {result}\n")
+            clog.log_cert_verify_failed(result)
             _log_audit(
                 db=db,
                 operation="VERIFY",
@@ -197,7 +184,7 @@ def verify_cert(req: VerifyCertRequest, request: Request, db: Session = Depends(
         ).first()
         
         if revoked:
-            print(f"[CA SERVICE] ✗ Certificate REVOKED: {revoked.reason}\n")
+            clog.log_cert_revoked_check(revoked.reason)
             _log_audit(
                 db=db,
                 operation="VERIFY",
@@ -209,10 +196,7 @@ def verify_cert(req: VerifyCertRequest, request: Request, db: Session = Depends(
             )
             return VerifyCertResponse(valid=False, error=f"Certificate revoked: {revoked.reason}")
         
-        print(f"[CA SERVICE] ✓ Certificate Verification SUCCESS")
-        print(f"[CA SERVICE] Plugin ID: {plugin_id}")
-        print(f"[CA SERVICE] Serial: {serial_number}")
-        print(f"[CA SERVICE] Plugin should proceed to Station 1\n")
+        clog.log_cert_verify_success(plugin_id, serial_number)
         
         _log_audit(
             db=db,
@@ -230,7 +214,7 @@ def verify_cert(req: VerifyCertRequest, request: Request, db: Session = Depends(
             serial_number=serial_number
         )
     except Exception as e:
-        print(f"[CA SERVICE] ✗ Certificate Verification ERROR: {str(e)}\n")
+        clog.log_cert_verify_failed(str(e))
         _log_audit(
             db=db,
             operation="VERIFY",
@@ -247,9 +231,7 @@ def revoke_cert(req: RevokeCertRequest, request: Request, db: Session = Depends(
     """Revoke a certificate by serial number"""
     client_ip = request.client.host if request.client else "unknown"
     
-    print(f"\n[CA SERVICE] Certificate Revocation Request")
-    print(f"[CA SERVICE] Serial Number: {req.serial_number}")
-    print(f"[CA SERVICE] Reason: {req.reason}")
+    clog.log_revoke_request(req.serial_number, req.reason)
     
     try:
         # Check if already revoked
@@ -293,8 +275,7 @@ def revoke_cert(req: RevokeCertRequest, request: Request, db: Session = Depends(
             ip_address=client_ip
         )
         
-        print(f"[CA SERVICE] ✓ Certificate Revoked Successfully")
-        print(f"[CA SERVICE] Plugin ID: {plugin_id}\n")
+        clog.log_revoke_success(plugin_id)
         
         return {"message": "Certificate revoked successfully", "serial_number": req.serial_number}
         
@@ -329,7 +310,7 @@ def check_revocation(serial_number: str, db: Session = Depends(get_db)):
     ).first()
     
     if revoked:
-        print(f"[CA SERVICE] Revocation check: {serial_number} - REVOKED")
+        clog.log_revocation_check(serial_number, True)
         return {
             "serial_number": serial_number,
             "revoked": True,
@@ -337,7 +318,7 @@ def check_revocation(serial_number: str, db: Session = Depends(get_db)):
             "revoked_at": revoked.revoked_at.isoformat() if revoked.revoked_at else None
         }
     
-    print(f"[CA SERVICE] Revocation check: {serial_number} - Not revoked")
+    clog.log_revocation_check(serial_number, False)
     return {
         "serial_number": serial_number,
         "revoked": False

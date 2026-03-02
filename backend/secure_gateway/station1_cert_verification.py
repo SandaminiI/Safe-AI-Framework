@@ -22,6 +22,7 @@ from config import CA_SERVICE_URL, JWT_SECRET, JWT_ALG, JWT_TTL_SECONDS, ROOT_CA
 from auth import issue_jwt_with_intent, verify_plugin_cert, load_root_ca_cert
 from models import Plugin
 from trust_engine import calculate_trust_score
+import color_logger as clog
 
 UTC = timezone.utc
 
@@ -83,17 +84,15 @@ class Station1CertVerification:
             # Extract certificate details
             cert_details = self._extract_cert_details(cert_pem)
             
-            print(f"[STATION 1] ✓ Certificate verified locally")
-            print(f"[STATION 1] Plugin ID: {cert_details['plugin_id']}")
-            print(f"[STATION 1] Serial: {cert_details['serial_number']}")
+            clog.log_station1_cert_verified(cert_details['plugin_id'], cert_details['serial_number'])
             
             return True, cert_details, ""
             
         except ValueError as e:
-            print(f"[STATION 1] ✗ Certificate verification failed: {str(e)}")
+            clog.log_station1_cert_verify_error(str(e))
             return False, {}, str(e)
         except Exception as e:
-            print(f"[STATION 1] ✗ Certificate verification error: {str(e)}")
+            clog.log_station1_cert_verify_error(str(e))
             return False, {}, f"Verification error: {str(e)}"
     
     async def check_revocation_with_ca(self, serial_number: str) -> Tuple[bool, str]:
@@ -116,17 +115,17 @@ class Station1CertVerification:
                 if response.status_code != 200:
                     # If CA is unreachable, we can choose to allow or deny
                     # For security, we'll allow but log warning
-                    print(f"[STATION 1] ⚠ CA revocation check unavailable, proceeding with caution")
+                    clog.log_station1_warning("CA revocation check unavailable, proceeding with caution")
                     return False, ""
                 
                 data = response.json()
                 return data.get("revoked", False), data.get("reason", "")
                 
         except httpx.TimeoutException:
-            print(f"[STATION 1] ⚠ CA revocation check timeout, proceeding with caution")
+            clog.log_station1_warning("CA revocation check timeout, proceeding with caution")
             return False, ""
         except Exception as e:
-            print(f"[STATION 1] ⚠ CA revocation check error: {str(e)}")
+            clog.log_station1_warning(f"CA revocation check error: {str(e)}")
             return False, ""
     
     def process_certificate_and_issue_jwt(
@@ -162,10 +161,7 @@ class Station1CertVerification:
         3. Calculate trust score
         4. Issue intent-bound JWT
         """
-        print(f"\n{'='*60}")
-        print(f"[STATION 1] Processing certificate for plugin: {plugin_id}")
-        print(f"[STATION 1] Requested intent: {intent}, scope: {scope}")
-        print(f"{'='*60}")
+        clog.log_station1_processing(plugin_id, intent, scope)
         
         # Step 1: Verify certificate LOCALLY using CA's public key
         is_valid, cert_details, error = self.verify_certificate_locally(
@@ -174,7 +170,7 @@ class Station1CertVerification:
         )
         
         if not is_valid:
-            print(f"[STATION 1] ✗ Rejected: {error}")
+            clog.log_station1_cert_failed(error)
             return False, {}, f"Certificate verification failed: {error}"
         
         # Step 2: Check revocation status with CA service
@@ -183,10 +179,10 @@ class Station1CertVerification:
         )
         
         if is_revoked:
-            print(f"[STATION 1] ✗ Certificate revoked: {revoke_reason}")
+            clog.log_station1_revoked(revoke_reason)
             return False, {}, f"Certificate has been revoked: {revoke_reason}"
         
-        print(f"[STATION 1] ✓ Certificate not revoked")
+        clog.log_station1_not_revoked()
         
         # Step 3: Get or create plugin in database
         plugin = db.get(Plugin, plugin_id)
@@ -228,9 +224,7 @@ class Station1CertVerification:
             cert_serial=cert_details.get("serial_number", "")
         )
         
-        print(f"[STATION 1] ✓ JWT issued successfully")
-        print(f"[STATION 1] Next: Station 2 (Access Control)")
-        print(f"{'='*60}\n")
+        clog.log_station1_jwt_issued()
         
         return True, {
             "jwt_token": jwt_token,
