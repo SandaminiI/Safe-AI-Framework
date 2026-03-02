@@ -9,6 +9,7 @@ from uml_rules import (
     generate_package_diagram,
     generate_sequence_diagram,
     generate_component_diagram,
+    generate_activity_diagram,
 )
 
 app = FastAPI(title="UML Regex Generator (CIR -> PlantUML)")
@@ -16,7 +17,7 @@ app = FastAPI(title="UML Regex Generator (CIR -> PlantUML)")
 
 class UMLRegexRequest(BaseModel):
     cir: Dict[str, Any]
-    diagram_type: str = "class"  # "class", "package", "sequence", "component"
+    diagram_type: str = "class"  # "class", "package", "sequence", "component", "activity"
 
 
 class UMLRegexResponse(BaseModel):
@@ -42,8 +43,14 @@ def uml_regex(req: UMLRegexRequest):
         plantuml = generate_sequence_diagram(req.cir)
     elif dt == "component":
         plantuml = generate_component_diagram(req.cir)
+    elif dt == "activity":
+        plantuml = generate_activity_diagram(req.cir)
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported diagram_type: {req.diagram_type}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported diagram_type: {req.diagram_type}. "
+                   f"Supported: class, package, sequence, component, activity",
+        )
 
     ok, errs = validate_plantuml(plantuml)
     if not ok:

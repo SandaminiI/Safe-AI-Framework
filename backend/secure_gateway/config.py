@@ -21,3 +21,20 @@ STRICT_CORE_AUTH = False
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_CA_CACHE_PATH = BASE_DIR / "root_ca_cert.pem"
 DB_PATH = BASE_DIR / "gateway.db"
+
+# Station 2 Access Control Settings
+TRUST_MIN_SCORE_FOR_ACCESS = 40.0
+
+# Intent-based permissions (what HTTP methods each intent allows)
+INTENT_PERMISSIONS = {
+    "read": ["GET"],
+    "write": ["GET", "POST", "PUT", "PATCH"],
+    "execute": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+}
+
+# Scope-based minimum trust scores
+SCOPE_MIN_TRUST = {
+    "public": 40.0,
+    "protected": 60.0,
+    "private": 80.0,
+}

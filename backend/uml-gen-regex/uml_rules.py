@@ -171,54 +171,25 @@ def _safe_sequence_label(method_name: str) -> str:
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Infrastructure-noise filter
-#
-#  The following class categories are excluded from Sequence and Component
-#  diagrams because they represent cross-cutting infrastructure rather than
-#  meaningful architectural participants or deployable components:
-#
-#    Exceptions / Errors  — control-flow throwables, not participants.
-#    Loggers              — cross-cutting logging utilities.
-#    Utils / Helpers      — stateless utility classes with no interaction role.
-#    Config classes       — Spring/framework @Configuration holders.
-#    Filters              — servlet/security filters (e.g. JwtAuthFilter).
-#    Framework classes    — framework bootstrap / adapter classes.
-#    Application / Main   — app entry-point bootstrappers.
-#
-#  Detection uses three complementary strategies so that both explicit suffixes
-#  (e.g. "JwtTokenFilter") and package-based placements (e.g. com.app.filter)
-#  are caught:
-#    1. Name-SUFFIX match  — exact word at end of class name (case-insensitive)
-#    2. Name-CONTAINS match — substring anywhere in class name
-#    3. Package-SEGMENT match — keyword appears as a dot-delimited segment
-#                               in the fully-qualified package name
-#
-#  This filter is applied in generate_sequence_diagram (lifeline exclusion)
-#  and generate_component_diagram (component node exclusion).
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Words that, when found at the END of a class name, mark it as noise.
 _NOISE_NAME_SUFFIXES: Tuple[str, ...] = (
-    "exception", "error",            # Throwables
-    "logger",                        # Logging classes
-    "util", "utils",                 # Utility classes
-    "helper", "helpers",             # Helper classes
-    "config", "configuration",       # Configuration holders
-    "filter",                        # Servlet / security filters
-    "framework",                     # Framework adapter/bootstrap classes
-    "application", "main",           # App entry points
+    "exception", "error",
+    "logger",
+    "util", "utils",
+    "helper", "helpers",
+    "config", "configuration",
+    "filter",
+    "framework",
+    "application", "main",
 )
 
-# Words that, when found ANYWHERE in a class name, mark it as noise.
-# Kept narrower than suffixes to avoid false positives (e.g. "Configurable").
 _NOISE_NAME_CONTAINS: Tuple[str, ...] = (
-    "logger",      # e.g. AppLogger, LoggerFactory
-    "logutil",     # e.g. LogUtil
-    "filterchain", # e.g. FilterChainProxy
+    "logger",
+    "logutil",
+    "filterchain",
 )
 
-# Package path SEGMENTS that mark every class in that package as noise.
-# Matched as dot-delimited segments so "config" does not accidentally match
-# "reconfigurable" or similar names.
 _NOISE_PKG_SEGMENTS: Tuple[str, ...] = (
     "exception", "exceptions",
     "error",     "errors",
@@ -232,24 +203,14 @@ _NOISE_PKG_SEGMENTS: Tuple[str, ...] = (
 
 
 def _is_infrastructure_noise(name: str, package: str) -> bool:
-    """
-    Return True if this type should be excluded from Sequence and Component
-    diagrams because it represents cross-cutting infrastructure rather than
-    a meaningful architectural participant or deployable component.
-    """
     nm   = (name    or "").lower()
     pkg  = (package or "").lower()
-    segs = set(pkg.replace("-", ".").split("."))   # dot-delimited segments
+    segs = set(pkg.replace("-", ".").split("."))
 
-    # 1. Name-suffix check  (e.g. JwtTokenFilter, SecurityConfig, LoggerUtil)
     if any(nm.endswith(sfx) for sfx in _NOISE_NAME_SUFFIXES):
         return True
-
-    # 2. Name-contains check  (e.g. AppLogger, FilterChainProxy)
     if any(kw in nm for kw in _NOISE_NAME_CONTAINS):
         return True
-
-    # 3. Package-segment check  (e.g. com.app.filter, com.app.config.security)
     if segs & set(_NOISE_PKG_SEGMENTS):
         return True
 
@@ -258,11 +219,6 @@ def _is_infrastructure_noise(name: str, package: str) -> bool:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CLASS DIAGRAM
-#
-#  Shows: classifiers (class/interface/enum), attribute compartment,
-#         operation compartment, visibility, modifiers, and relationships
-#         (INHERITS, IMPLEMENTS, ASSOCIATES, DEPENDS_ON).
-#  Does NOT show: package grouping, runtime call sequences, components.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_class_diagram(cir: Dict[str, Any]) -> str:
@@ -286,7 +242,6 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
         header = f"{kind} {name} {class_mods} {{" if class_mods else f"{kind} {name} {{"
         lines.append(header)
 
-        # Attribute compartment
         for f in fields_by_type.get(type_id, []):
             vis_symbol = VISIBILITY_MAP.get(f.get("visibility", "package"), "~")
             field_name = f.get("name", "field")
@@ -299,8 +254,6 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
             mods_prefix = f"{f_mods} " if f_mods else ""
             lines.append(f"  {vis_symbol} {mods_prefix}{field_name} : {display_type}")
 
-        # Operation compartment — constructors are intentionally excluded
-        # (they add noise without adding structural information to a class overview)
         for m in methods_by_type.get(type_id, []):
             if m.get("is_constructor"):
                 continue
@@ -321,7 +274,6 @@ def generate_class_diagram(cir: Dict[str, Any]) -> str:
 
         lines.append("}")
 
-    # Classifier relationships
     relation_lines: Set[str] = set()
     type_name_by_id = {tid: attrs.get("name", tid) for tid, attrs in type_nodes.items()}
 
@@ -358,43 +310,26 @@ def generate_plantuml_from_cir(cir: Dict[str, Any]) -> str:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PACKAGE DIAGRAM
-#
-#  Shows: packages as folder-tab rectangles, classifier NAMES (only) inside
-#         each package, and inter-PACKAGE dependency arrows aggregated from
-#         cross-package type relationships.
-#
-#  Does NOT show:
-#    - Classifier kind keywords (class/interface/enum) — those belong in the
-#      Class Diagram. The Package Diagram is about physical namespace layout,
-#      not type classification.
-#    - Individual type-to-type relationship arrows — arrows here represent
-#      package-level dependencies, not per-type relationships. If two types
-#      in the same package relate, no arrow is drawn (they are co-located).
-#    - Attributes or operations — these belong exclusively in the Class Diagram.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_package_diagram(cir: Dict[str, Any]) -> str:
     nodes_by_id, edges = _index_cir(cir)
 
-    # Collect TypeDecl nodes
     type_nodes: Dict[str, Dict[str, Any]] = {}
     for nid, n in nodes_by_id.items():
         if n.get("kind") == "TypeDecl":
             type_nodes[nid] = n.get("attrs", {})
 
-    # Group classifiers by package
     package_to_types: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
     for tid, attrs in type_nodes.items():
         pkg = attrs.get("package") or "(default)"
         package_to_types.setdefault(pkg, []).append((tid, attrs))
 
-    # Map type id → package for dependency aggregation
     type_to_package: Dict[str, str] = {
         tid: (attrs.get("package") or "(default)")
         for tid, attrs in type_nodes.items()
     }
 
-    # Build PlantUML
     out: List[str] = [
         "@startuml",
         "",
@@ -413,7 +348,6 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
         "",
     ]
 
-    # Sort packages: default first, then alphabetically
     sorted_pkgs = sorted(
         package_to_types.keys(),
         key=lambda p: (0 if p == "(default)" else 1, p)
@@ -429,17 +363,10 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
         for tid, attrs in members:
             name = attrs.get("name", "UnknownType")
             type_name_by_id[tid] = name
-            # FIX: write classifier name only — no "class"/"interface"/"enum" keyword.
-            # Classifier kind is irrelevant to package organisation.
             out.append(f'  [{name}]')
         out.append("}")
         out.append("")
 
-    # FIX: Aggregate type-level relationships into inter-PACKAGE dependency arrows.
-    # Only draw an arrow when the source and destination are in DIFFERENT packages.
-    # Multiple type relationships between the same two packages collapse to one arrow.
-    # INHERITS and IMPLEMENTS are classifier relationships — they are not meaningful
-    # as package-level dependencies and are therefore excluded here.
     package_deps: Set[Tuple[str, str]] = set()
 
     for e in edges:
@@ -469,27 +396,11 @@ def generate_package_diagram(cir: Dict[str, Any]) -> str:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SEQUENCE DIAGRAM
-#
-#  Shows: lifelines (participants with UML stereotype shapes), synchronous
-#         call messages (->), return messages (-->), combined fragments
-#         (opt for boolean returns, loop for collection returns).
-#
-#  Message source priority:
-#    1. PRIMARY — CALLS edges: represent actual runtime method invocations.
-#       When CALLS data is present, all messages are derived from it exclusively.
-#    2. FALLBACK — ASSOCIATES/DEPENDS_ON edges + useful_methods() heuristic:
-#       used only when no CALLS edges exist in the CIR. In this mode a note
-#       is emitted on the diagram to indicate that messages are inferred from
-#       structural associations, not from observed call chains.
-#
-#  Does NOT show: class attributes, fields, inheritance, package grouping,
-#                 or component interfaces.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
     nodes_by_id, edges = _index_cir(cir)
 
-    # 1. Index type nodes
     type_attrs: Dict[str, Dict[str, Any]] = {}
     for nid, n in nodes_by_id.items():
         if n.get("kind") == "TypeDecl":
@@ -498,7 +409,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
     if not type_attrs:
         return '@startuml\nnote "No types found in CIR." as N1\n@enduml'
 
-    # 2. Methods per type
     methods_by_type: Dict[str, List[Dict[str, Any]]] = {t: [] for t in type_attrs}
     method_owner: Dict[str, str] = {}
     for e in edges:
@@ -510,7 +420,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                 methods_by_type[src].append(ma)
                 method_owner[dst] = src
 
-    # 3. Parameters per method
     params_by_method: Dict[str, List[Dict[str, Any]]] = {}
     for e in edges:
         if e.get("type") == "PARAM_OF":
@@ -520,13 +429,11 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                 if pnode and pnode.get("kind") == "Parameter":
                     params_by_method.setdefault(mid, []).append(pnode.get("attrs", {}))
 
-    # 4. Index method names and CALLS edges
     method_name_by_id: Dict[str, str] = {}
     for nid, n in nodes_by_id.items():
         if n.get("kind") == "Method":
             method_name_by_id[nid] = n.get("attrs", {}).get("name", "")
 
-    # Build calls_by_src from CALLS edges — this is the PRIMARY message source
     calls_by_src: Dict[str, List[Dict[str, Any]]] = {}
     for e in edges:
         if e.get("type") != "CALLS":
@@ -539,7 +446,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         order = (e.get("attrs") or {}).get("order", 0)
         calls_by_src.setdefault(src_m, []).append({"dst": dst_m, "order": order})
 
-    # 5. Association graph (used ONLY as fallback when no CALLS data exists)
     associates: Dict[str, List[str]] = {t: [] for t in type_attrs}
     for e in edges:
         if e.get("type") not in ("ASSOCIATES", "DEPENDS_ON"):
@@ -549,7 +455,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             if dst not in associates[src]:
                 associates[src].append(dst)
 
-    # 6. Model/POJO detection — exclude pure data-holders from sequence lifelines
     _MODEL_PKG_KW  = {"model", "entity", "domain", "dto", "vo", "bean", "pojo"}
     _TRIVIAL_PFXS  = ("get", "set", "is", "has")
     _TRIVIAL_NAMES = {"tostring", "hashcode", "equals", "clone", "compareto"}
@@ -570,9 +475,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         return len(non_trivial) == 0
 
     model_types: Set[str] = {t for t in type_attrs if _is_model(t)}
-
-    # Also exclude infrastructure-noise types (exceptions, loggers, config,
-    # app entry points) — they are not meaningful sequence diagram participants.
     noise_types: Set[str] = {
         t for t in type_attrs
         if _is_infrastructure_noise(
@@ -582,7 +484,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
     }
     excluded_types: Set[str] = model_types | noise_types
 
-    # 7. Participant ordering by architectural layer
     def layer(tid: str) -> int:
         a = type_attrs[tid]
         return _layer_order(a.get("name", ""), a.get("package", ""))
@@ -627,47 +528,22 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         if tid not in seen:
             ordered.append(tid)
 
-    # 8. Participant shape keyword derived from architectural layer.
-    #
-    #  UML rule: "actor" (stick figure) represents an EXTERNAL entity that
-    #  initiates or participates in a use case from OUTSIDE the system boundary
-    #  — e.g. a human user, an external system, or a device.
-    #  Controllers, services, and repositories are INTERNAL system components;
-    #  they must never be rendered as actors regardless of their position in the
-    #  call chain. The correct shapes for internal components are:
-    #    boundary   → circle-on-line  — system boundary (controllers, REST handlers)
-    #    control    → circle-arrow    — logic coordinators (services, managers)
-    #    database   → cylinder        — data stores (DAOs, repositories)
-    #    participant → rectangle      — all other internal components
-    #
-    #  A synthetic "Client" actor IS added automatically at the leftmost position
-    #  to represent the external caller that triggers the entry-point controllers.
-    #  This is required by UML: every sequence must have an initiating entity.
     def _participant_keyword(tid: str) -> str:
         a   = type_attrs[tid]
         nm  = (a.get("name")    or "").lower()
         pkg = (a.get("package") or "").lower()
         combined = nm + " " + pkg
-        # Controllers and REST boundary components
         if any(k in combined for k in ("controller", "resource", "endpoint", "rest", "handler", "boundary", "api")):
             return "boundary"
-        # Services, managers, business logic components
         if any(k in combined for k in ("service", "manager", "interactor", "usecase", "business", "facade")):
             return "control"
-        # Data access and persistence components
         if any(k in combined for k in ("dao", "repository", "repo", "database", "db", "persistence", "store", "gateway")):
             return "database"
-        # All other internal components (utils, config, security filters, etc.)
         return "participant"
 
-    # Identify entry-point controllers: boundary-shaped participants that have
-    # no incoming calls from any other system participant (i.e. the first
-    # component to receive a request from outside the system boundary).
-    # These are the targets for the initial "Client" actor arrow.
     entry_controllers: List[str] = []
     for tid in ordered:
         if _participant_keyword(tid) == "boundary":
-            # Check if any other non-excluded participant calls into this one
             is_called_internally = any(
                 method_owner.get(e.get("dst")) == tid
                 for e in edges
@@ -679,7 +555,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             if not is_called_internally:
                 entry_controllers.append(tid)
 
-    # 9. Method helpers
     _SKIP_PFXS = ("get", "set", "is", "has")
 
     def useful_methods(type_id: str, max_count: int = 4) -> List[Dict[str, Any]]:
@@ -744,7 +619,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         rt = _safe_type(method.get("raw_return_type") or method.get("return_type") or "")
         return rt.lower() in ("boolean", "bool")
 
-    # 10. Build PlantUML
     out: List[str] = [
         "@startuml",
         "",
@@ -763,16 +637,12 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         out.append("@enduml")
         return "\n".join(out)
 
-    # Identify boundary (controller) participants — these receive the initial
-    # HTTP request from the external Client actor.
     boundary_names: List[str] = [
         type_attrs[tid].get("name", tid)
         for tid in ordered
         if _participant_keyword(tid) == "boundary"
     ]
 
-    # Declare participants — Client actor always first (leftmost lifeline),
-    # followed by all internal participants in architectural layer order.
     out.append('actor "Client" as Client')
     for tid in ordered:
         nm      = type_attrs[tid].get("name", tid)
@@ -780,23 +650,17 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
         out.append(f'{keyword} "{nm}" as {nm}')
     out.append("")
 
-    # Emit Client -> Controller trigger arrows for each entry-point controller.
-    # With autoactivate on, every -> must have a matching --> to close the bar.
     for ctrl_name in boundary_names:
         out.append(f"Client -> {ctrl_name} : HTTP Request")
         out.append(f"{ctrl_name} --> Client : HTTP Response")
     if boundary_names:
         out.append("")
 
-    # ── FIX: PRIMARY path — derive messages exclusively from CALLS edges ──────
-    # CALLS edges represent actual runtime method invocations and are the only
-    # correct source of messages in a Sequence Diagram.
     has_arrows   = False
     shown:       Set[Tuple[str, str, str]] = set()
     using_calls  = bool(calls_by_src)
 
     if using_calls:
-        # Collect all call triples in order
         call_triples: List[Tuple[int, str, str, Dict[str, Any]]] = []
         for src_m, call_list in calls_by_src.items():
             s_tid = method_owner.get(src_m)
@@ -823,7 +687,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                 order = call.get("order", 0)
                 call_triples.append((order, s_name, d_name, dummy))
 
-        # Emit in call order
         call_triples.sort(key=lambda x: x[0])
         for _, s_name, d_name, dummy in call_triples:
             dst_nm = dummy.get("name", "call")
@@ -840,7 +703,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             if is_list:
                 out.append("loop for each item")
                 out.append("  " + s_name + " -> " + d_name + " : " + cl)
-                # autoactivate on requires a return to close the activation bar
                 out.append("  " + d_name + " --> " + s_name + " : " + (rl or "void"))
                 out.append("end")
             elif is_bool:
@@ -850,18 +712,11 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                 out.append("end")
             else:
                 out.append(s_name + " -> " + d_name + " : " + cl)
-                # autoactivate on requires a return to close the activation bar
                 out.append(d_name + " --> " + s_name + " : " + (rl or "void"))
         if has_arrows:
             out.append("")
 
     else:
-        # ── FALLBACK — no CALLS data in CIR ───────────────────────────────────
-        # Infer messages from structural ASSOCIATES/DEPENDS_ON edges.
-        # FIX: note text uses \n (single backslash) for PlantUML line break,
-        #      not \\n which produces a literal backslash-n in the rendered note.
-        # FIX: note over references the first DECLARED participant (boundary first,
-        #      then ordered[0]) to avoid referencing an undeclared lifeline.
         first_declared = (
             type_attrs[ordered[0]].get("name", ordered[0]) if ordered else ""
         )
@@ -898,9 +753,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                     out.append(c_name + " -> " + e_name + " : request()")
                     out.append(e_name + " --> " + c_name + " : void")
                     has_arrows = True
-                    # FIX: '...' sequence divider is INVALID with autoactivate on —
-                    # it interrupts open activation bars and causes a 500 render crash.
-                    # Removed entirely; blank line provides sufficient visual spacing.
                     out.append("")
                     continue
 
@@ -915,7 +767,6 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                     if is_list:
                         out.append("loop for each item")
                         out.append("  " + c_name + " -> " + e_name + " : " + cl)
-                        # autoactivate on requires a return to close the activation bar
                         out.append("  " + e_name + " --> " + c_name + " : " + (rl or "void"))
                         out.append("end")
                     elif is_bool:
@@ -925,10 +776,8 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                         out.append("end")
                     else:
                         out.append(c_name + " -> " + e_name + " : " + cl)
-                        # autoactivate on requires a return to close the activation bar
                         out.append(e_name + " --> " + c_name + " : " + (rl or "void"))
 
-                # FIX: '...' removed — invalid with autoactivate on (causes 500 render error)
                 out.append("")
 
     if not has_arrows:
@@ -943,26 +792,11 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  COMPONENT DIAGRAM
-#
-#  Shows: components (notched rectangles), provided interfaces (lollipops),
-#         component dependencies (uses arrows), package/subsystem grouping,
-#         and architectural stereotype labels.
-#
-#  Does NOT show:
-#    - INHERITS (--|>) — generalization is a classifier relationship that
-#      belongs in the Class Diagram, not in a Component Diagram.
-#    - IMPLEMENTS (..|>) — realization is also a classifier relationship.
-#      When a class implements an interface, the interface appears as a
-#      lollipop on the component; a realization arrow between classifiers
-#      is not a component-level construct.
-#    - Class attributes, operations, or field-level detail.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_component_diagram(cir: Dict[str, Any]) -> str:
     nodes_by_id, edges = _index_cir(cir)
 
-    # Collect types — excluding infrastructure-noise classes (exceptions, loggers,
-    # config holders, app entry points) which are not deployable components.
     type_nodes:  Dict[str, Dict[str, Any]] = {}
     package_of:  Dict[str, str] = {}
 
@@ -977,18 +811,14 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
         type_nodes[nid] = attrs
         package_of[nid] = pkg or "(default)"
 
-    # FIX: Only include component-level dependency edge types.
-    # INHERITS and IMPLEMENTS are classifier relationships (Class Diagram concerns)
-    # and must not appear in a Component Diagram.
     dep_edges: List[Tuple[str, str, str]] = []
     for e in edges:
         src, dst, etype = e.get("src"), e.get("dst"), e.get("type")
         if src and dst and etype and src != dst:
             if src in type_nodes and dst in type_nodes:
-                if etype in ("ASSOCIATES", "DEPENDS_ON"):   # INHERITS and IMPLEMENTS removed
+                if etype in ("ASSOCIATES", "DEPENDS_ON"):
                     dep_edges.append((src, dst, etype))
 
-    # Layer stereotype labels for packages and components
     _LAYERS: List[Tuple[str, str]] = [
         ("controller", "<<Controller>>"),
         ("resource",   "<<Controller>>"),
@@ -1036,13 +866,11 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
     def _iface_alias(tid: str) -> str:
         return "I_" + re.sub(r"[^a-zA-Z0-9_]", "_", tid)
 
-    # Group types by package
     pkg_to_types: Dict[str, List[str]] = {}
     for tid in type_nodes:
         pkg = package_of[tid]
         pkg_to_types.setdefault(pkg, []).append(tid)
 
-    # Common root prefix (for display shortening)
     all_pkgs = [p for p in pkg_to_types if p != "(default)"]
     root_prefix = ""
     if len(all_pkgs) > 1:
@@ -1063,12 +891,10 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
             return rel if rel else "(root)"
         return pkg.rsplit(".", 1)[-1]
 
-    # Types that are called (will get a provided-interface lollipop)
     called_types: Set[str] = set()
     for src, dst, _ in dep_edges:
         called_types.add(dst)
 
-    # Build PlantUML
     out: List[str] = [
         "@startuml",
         "",
@@ -1087,7 +913,6 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
         "",
     ]
 
-    # Root frame
     use_root = bool(root_prefix) and len(all_pkgs) > 1
     indent = ""
     if use_root:
@@ -1126,10 +951,8 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
             alias  = _alias(tid)
             ialias = _iface_alias(tid)
 
-            # Component with notch icon
             out.append(f'{inner}[{nm}] as {alias}')
 
-            # Provided interface lollipop — only for components that are called
             if tid in called_types:
                 out.append(f'{inner}() "{nm}" as {ialias}')
                 out.append(f'{inner}{alias} - {ialias}')
@@ -1142,9 +965,6 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
         out.append("}")
         out.append("")
 
-    # Component dependency arrows — caller to callee's provided interface
-    # FIX: Only "uses" arrows (from ASSOCIATES / DEPENDS_ON).
-    # INHERITS and IMPLEMENTS have already been excluded from dep_edges above.
     arrow_set: Set[Tuple[str, str]] = set()
     for src_id, dst_id, etype in dep_edges:
         src_alias = _alias(src_id)
@@ -1156,6 +976,460 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
         label = _arrow_label(package_of[dst_id], type_nodes[dst_id].get("name", ""))
         out.append(f"{src_alias} --> {dst_alias} : {label}")
 
+    out.append("")
+    out.append("@enduml")
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ACTIVITY DIAGRAM
+#
+#  Shows: method-level control flow derived from CALLS edges (primary source),
+#         with a heuristic fallback when no CALLS data is present.
+#
+#  PlantUML constructs used:
+#    - |Swimlane|                                   (one lane per architectural type)
+#    - start / stop
+#    - :action;                                     (action node)
+#    - if (...) then (yes) / else (no) / endif      (boolean-return guard)
+#    - repeat / repeat while (...)                  (collection-return loop)
+#    - note right / note left                       (parameter hints on decisions)
+#
+#  Message source priority:
+#    1. PRIMARY  — CALLS edges: actual runtime method invocations in call order.
+#    2. FALLBACK — method listing heuristic when no CALLS data exists in CIR.
+#
+#  Does NOT show: fields, inheritance, package structure, interface lollipops.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generate_activity_diagram(cir: Dict[str, Any]) -> str:
+    """
+    Generate a PlantUML activity diagram from a CIR graph.
+
+    Design decisions for PlantUML compatibility:
+    ─────────────────────────────────────────────
+    PRIMARY path (CALLS edges present):
+      • Uses NO swimlanes. Swimlane switches inside if/repeat blocks crash the
+        PlantUML swimlane renderer, and cross-type call chains almost always
+        cross lane boundaries inside structured blocks.
+      • Instead, action labels are prefixed with the owning type name so the
+        reader can still see which component handles each step.
+      • boolean-return → if/endif decision diamond
+      • collection-return → repeat/repeat while (one-line form, always safe)
+      • Deduplicates (src_method, dst_method) pairs.
+
+    FALLBACK path (no CALLS data):
+      • Uses swimlanes — one per active type. Each type's methods are listed
+        sequentially inside its own lane, so lane boundaries never appear
+        inside a structured block.
+      • Same boolean / collection heuristics applied.
+
+    Exclusions (both paths):
+      • Pure model/POJO types (Student, User) — no behaviour.
+      • Util/service/dao types are KEPT (DatabaseUtil, BCryptUtil are actors).
+    """
+    nodes_by_id, edges = _index_cir(cir)
+
+    # ── 1. Index TypeDecl nodes ─────────────────────────────────────────────
+    type_attrs: Dict[str, Dict[str, Any]] = {}
+    for nid, n in nodes_by_id.items():
+        if n.get("kind") == "TypeDecl":
+            type_attrs[nid] = n.get("attrs", {})
+
+    if not type_attrs:
+        return "@startuml\nstart\n:No types found in CIR.;\nstop\n@enduml"
+
+    # ── 2. Methods per type + method ownership ──────────────────────────────
+    methods_by_type: Dict[str, List[Dict[str, Any]]] = {t: [] for t in type_attrs}
+    method_owner: Dict[str, str] = {}
+    method_attrs_by_id: Dict[str, Dict[str, Any]] = {}
+
+    for e in edges:
+        if e.get("type") == "HAS_METHOD":
+            src, dst = e.get("src"), e.get("dst")
+            if src in type_attrs and dst in nodes_by_id:
+                ma = dict(nodes_by_id[dst].get("attrs", {}))
+                ma["_id"] = dst
+                methods_by_type[src].append(ma)
+                method_owner[dst] = src
+                method_attrs_by_id[dst] = ma
+
+    # ── 3. Parameters per method ────────────────────────────────────────────
+    params_by_method: Dict[str, List[Dict[str, Any]]] = {}
+    for e in edges:
+        if e.get("type") == "PARAM_OF":
+            pid, mid = e.get("src"), e.get("dst")
+            if pid and mid:
+                pn = nodes_by_id.get(pid)
+                if pn and pn.get("kind") == "Parameter":
+                    params_by_method.setdefault(mid, []).append(pn.get("attrs", {}))
+
+    # ── 4. CALLS edges ──────────────────────────────────────────────────────
+    calls_by_src: Dict[str, List[Dict[str, Any]]] = {}
+    for e in edges:
+        if e.get("type") != "CALLS":
+            continue
+        src_m, dst_m = e.get("src"), e.get("dst")
+        if not src_m or not dst_m:
+            continue
+        dst_nm = (nodes_by_id.get(dst_m) or {}).get("attrs", {}).get("name", "")
+        if _is_dunder(dst_nm):
+            continue
+        order = (e.get("attrs") or {}).get("order", 0)
+        calls_by_src.setdefault(src_m, []).append({"dst": dst_m, "order": order})
+
+    for src_m in calls_by_src:
+        calls_by_src[src_m].sort(key=lambda x: x.get("order", 0))
+
+    # ── 5. Exclusion: pure model/POJO types only ────────────────────────────
+    _MODEL_PKG_KW     = {"model", "entity", "domain", "dto", "vo", "bean", "pojo"}
+    _BEHAVIOUR_PKG_KW = {"util", "utils", "helper", "helpers", "service", "services",
+                         "manager", "managers", "dao", "repository", "config"}
+    _BEHAVIOUR_SFXS   = ("util", "utils", "helper", "helpers", "service", "manager",
+                         "dao", "repo", "repository", "config", "factory")
+    _TRIVIAL_PFXS     = ("get", "set", "is", "has")
+    _TRIVIAL_NAMES    = {"tostring", "hashcode", "equals", "clone", "compareto"}
+
+    def _is_pure_model(tid: str) -> bool:
+        a   = type_attrs[tid]
+        pkg = (a.get("package") or "").lower()
+        nm  = (a.get("name")    or "").lower()
+        if any(kw in pkg for kw in _BEHAVIOUR_PKG_KW):
+            return False
+        if any(nm.endswith(sfx) for sfx in _BEHAVIOUR_SFXS):
+            return False
+        if any(kw in pkg or kw in nm for kw in _MODEL_PKG_KW):
+            return True
+        ms = [m for m in methods_by_type.get(tid, [])
+              if not m.get("is_constructor") and not _is_dunder(m.get("name", ""))]
+        if not ms:
+            return False
+        non_trivial = [m for m in ms
+                       if not any(m.get("name", "").startswith(p) for p in _TRIVIAL_PFXS)
+                       and m.get("name", "").lower() not in _TRIVIAL_NAMES]
+        return len(non_trivial) == 0
+
+    excluded: Set[str] = {t for t in type_attrs if _is_pure_model(t)}
+    active_types = {t: a for t, a in type_attrs.items() if t not in excluded}
+    if not active_types:
+        active_types = dict(type_attrs)
+
+    sorted_type_ids: List[str] = sorted(
+        active_types.keys(),
+        key=lambda t: _layer_order(
+            active_types[t].get("name", ""),
+            active_types[t].get("package", ""),
+        ),
+    )
+
+    # ── 6. Format helpers ────────────────────────────────────────────────────
+
+    def _safe_label(text: str) -> str:
+        """Escape chars that break PlantUML labels: <, >, |"""
+        return text.replace("<", "(").replace(">", ")").replace("|", "/")
+
+    def _fmt_action(method_id: str, method_name: str, owner_name: str) -> str:
+        params = params_by_method.get(method_id, [])[:2]
+        parts: List[str] = []
+        for p in params:
+            pn = p.get("name", "")
+            pt = _clean_type_short(p.get("raw_type") or p.get("type_name") or "")
+            if pn and pt:
+                parts.append(f"{pn}: {pt}")
+            elif pn:
+                parts.append(pn)
+        suffix = ", ..." if len(params_by_method.get(method_id, [])) > 2 else ""
+        raw = f"{owner_name}.{method_name}({', '.join(parts)}{suffix})"
+        return _safe_label(raw)
+
+    def _is_list_ret(mid: str) -> bool:
+        ma = method_attrs_by_id.get(mid) or {}
+        rt = (ma.get("raw_return_type") or ma.get("return_type") or "").lower()
+        return any(k in rt for k in ("list", "collection", "set", "iterable", "[]", "array"))
+
+    def _is_bool_ret(mid: str) -> bool:
+        ma = method_attrs_by_id.get(mid) or {}
+        rt = _clean_type_short(ma.get("raw_return_type") or ma.get("return_type") or "")
+        return rt.lower() in ("boolean", "bool")
+
+    # ── 7. Gather active call triples, grouped by caller layer ─────────────
+    #
+    # Problem with a flat sort-by-order: every caller method resets `order`
+    # from 0, so calls from AccountService.createAccount (order 0,1,2…) and
+    # AccountService.deposit (order 0,1,2…) interleave arbitrarily when merged
+    # into one list and sorted by order value alone.
+    #
+    # Fix: group callers by their owning type's architectural layer, then sort
+    # each group's calls by their local order.  This gives a coherent top-down
+    # flow: Controller methods first, Service methods next, Repository last.
+    #
+    # Within a type, caller methods are sorted by the first order value of any
+    # call they make (i.e. the method that fires earliest in the file).
+
+    # Map src_method → (layer, earliest_order) for sorting
+    src_layer: Dict[str, Tuple[int, int]] = {}
+    for src_m, call_list in calls_by_src.items():
+        src_type = method_owner.get(src_m)
+        if not src_type or src_type not in active_types:
+            continue
+        # Skip private callers — Python _ prefix or CIR visibility=private
+        src_attrs = method_attrs_by_id.get(src_m) or {}
+        src_nm    = src_attrs.get("name", "")
+        src_vis   = src_attrs.get("visibility", "public")
+        if src_vis == "private":
+            continue
+        if src_nm.startswith("_") and not src_nm.startswith("__"):
+            continue
+        layer = _layer_order(
+            active_types[src_type].get("name", ""),
+            active_types[src_type].get("package", ""),
+        )
+        earliest = min((c.get("order", 0) for c in call_list), default=0)
+        src_layer[src_m] = (layer, earliest)
+
+    # Sort callers: by layer first, then earliest call order
+    sorted_callers = sorted(src_layer.keys(), key=lambda m: src_layer[m])
+
+    # Build ordered flat list: for each caller, append its dst calls in order
+    all_calls: List[Tuple[int, str, str]] = []
+    for src_m in sorted_callers:
+        for call in sorted(calls_by_src[src_m], key=lambda c: c.get("order", 0)):
+            dst_m = call.get("dst")
+            if not dst_m:
+                continue
+            dst_type = method_owner.get(dst_m)
+            if not dst_type or dst_type not in active_types:
+                continue
+            # Skip private destination methods — either by CIR visibility field
+            # or by Python convention (_name prefix means private/internal).
+            dst_attrs = method_attrs_by_id.get(dst_m) or {}
+            dst_vis   = dst_attrs.get("visibility", "public")
+            dst_nm    = dst_attrs.get("name", "")
+            if dst_vis == "private":
+                continue
+            # Python: single underscore prefix = private/protected
+            if dst_nm.startswith("_") and not dst_nm.startswith("__"):
+                continue
+            all_calls.append((src_layer[src_m][0], src_m, dst_m))
+
+    use_primary = bool(all_calls)
+
+    # ── 8. Skinparam header (no swimlane params if using primary/no-lane mode)
+    out: List[str] = [
+        "@startuml",
+        "",
+        "skinparam shadowing               false",
+        "",
+        "start",
+        "",
+    ]
+
+    if use_primary:
+        # ── PRIMARY PATH ─────────────────────────────────────────────────────
+        # Emits action nodes with heuristic branching inferred from:
+        #   • method name prefixes  (validate/check/exists/verify → guard)
+        #   • return type           (Optional/boolean → guard, List → loop)
+        #   • call position         (first call in a chain is often a lookup/guard)
+        #
+        # Branching rules (applied per dst method):
+        #   GUARD   — name starts with validate/check/exists/verify/is/has/can/ensure
+        #             OR returns boolean/Optional/bool
+        #             → if (condition) then (yes) … else (no) :handle error; endif
+        #   LOOP    — returns List/Collection/Set/Iterable/array
+        #             → repeat … repeat while (more items?) is (yes) -> no;
+        #   ACTION  — everything else → plain :action; node
+        #
+        # Dedup on dst_m: each called method appears at most once.
+
+        # ── helper classifiers ──────────────────────────────────────────────
+        _GUARD_PFXS = ("validate", "check", "verify", "ensure", "assert",
+                       "exists", "existsby", "is", "has", "can", "allow")
+        _FIND_PFXS  = ("find", "get", "load", "fetch", "lookup", "query",
+                       "retrieve", "read", "search")
+
+        def _is_guard(mid: str) -> bool:
+            """
+            Returns True when the method acts as a decision gate:
+              - name prefix signals validation / existence check
+              - OR returns boolean / Boolean
+              - OR returns Optional (findBy… that may come back empty)
+            """
+            ma    = method_attrs_by_id.get(mid) or {}
+            name  = (ma.get("name") or "").lower()
+            rt    = _clean_type_short(
+                        ma.get("raw_return_type") or ma.get("return_type") or ""
+                    ).lower()
+            # boolean return always a guard
+            if rt in ("boolean", "bool"):
+                return True
+            # Optional return → potential null path
+            if "optional" in rt:
+                return True
+            # Explicit guard prefix
+            if any(name.startswith(p) for p in _GUARD_PFXS):
+                return True
+            return False
+
+        def _is_loop(mid: str) -> bool:
+            ma = method_attrs_by_id.get(mid) or {}
+            rt = (ma.get("raw_return_type") or ma.get("return_type") or "").lower()
+            return any(k in rt for k in
+                       ("list", "collection", "set", "iterable", "[]", "array"))
+
+        def _guard_label(dst_mname: str, mid: str) -> str:
+            """Human-readable condition label for the diamond."""
+            ma   = method_attrs_by_id.get(mid) or {}
+            name = dst_mname  # preserve original casing for regex
+            rt   = _clean_type_short(
+                       ma.get("raw_return_type") or ma.get("return_type") or ""
+                   ).lower()
+
+            if "optional" in rt:
+                # findByUsername → "username found?"
+                # findByAccountNumber → "accountNumber found?"
+                subject = re.sub(
+                    r"^(?:findBy|getBy|loadBy|fetchBy|searchBy|"
+                    r"find|get|load|fetch|lookup|query|retrieve)",
+                    "", name
+                ).strip()
+                if subject:
+                    # split camelCase: AccountNumber → Account Number
+                    subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+                else:
+                    subject = "result"
+                return f"{subject} found?"
+
+            # boolean methods: existsByUsername → "username exists?"
+            #                  validateInput   → "input valid?"
+            #                  checkPassword   → "password correct?"
+            #                  isActive        → "active?"
+            nl = name.lower()
+            # Determine suffix first, then strip prefix keeping remainder
+            if nl.startswith("existsby"):
+                subject = name[len("existsBy"):]
+                suffix  = " exists?"
+            elif nl.startswith("exists"):
+                subject = name[len("exists"):]
+                suffix  = " exists?"
+            elif nl.startswith("validateby"):
+                subject = name[len("validateBy"):]
+                suffix  = " valid?"
+            elif nl.startswith("validate"):
+                subject = name[len("validate"):]
+                suffix  = " valid?"
+            elif nl.startswith("verifyby"):
+                subject = name[len("verifyBy"):]
+                suffix  = " valid?"
+            elif nl.startswith("verify"):
+                subject = name[len("verify"):]
+                suffix  = " valid?"
+            elif nl.startswith("checkby"):
+                subject = name[len("checkBy"):]
+                suffix  = " correct?"
+            elif nl.startswith("check"):
+                subject = name[len("check"):]
+                suffix  = " correct?"
+            elif nl.startswith("ensure"):
+                subject = name[len("ensure"):]
+                suffix  = " satisfied?"
+            elif nl.startswith("has"):
+                subject = name[len("has"):]
+                suffix  = "?"
+            elif nl.startswith("is"):
+                subject = name[len("is"):]
+                suffix  = "?"
+            elif nl.startswith("can"):
+                subject = name[len("can"):]
+                suffix  = "?"
+            elif nl.startswith("allow"):
+                subject = name[len("allow"):]
+                suffix  = " allowed?"
+            else:
+                subject = name
+                suffix  = "?"
+
+            if not subject:
+                subject = name
+            # camelCase → space-separated lowercase words
+            subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+            return f"{subject}{suffix}"
+
+        # ── emit loop ───────────────────────────────────────────────────────
+        emitted: Set[str] = set()
+
+        for _, src_m, dst_m in all_calls:
+            if dst_m in emitted:
+                continue
+            emitted.add(dst_m)
+
+            dst_type  = method_owner.get(dst_m, "")
+            dst_name  = (type_attrs.get(dst_type) or {}).get("name", dst_type)
+            dst_mname = (nodes_by_id.get(dst_m) or {}).get("attrs", {}).get("name", "")
+
+            if not dst_mname or _is_dunder(dst_mname):
+                continue
+
+            action = _fmt_action(dst_m, dst_mname, dst_name)
+
+            if _is_loop(dst_m):
+                # Collection return → process-each loop
+                out.append("repeat")
+                out.append(f"  :{action};")
+                out.append("repeat while (more items?) is (yes) -> no;")
+
+            elif _is_guard(dst_m):
+                # Guard / validation → decision diamond
+                cond = _safe_label(_guard_label(dst_mname, dst_m))
+                out.append(f"if ({cond}) then (yes)")
+                out.append(f"  :{action};")
+                out.append("else (no)")
+                out.append("  :handle error / return;")
+                out.append("endif")
+
+            else:
+                out.append(f":{action};")
+
+    else:
+        # ── FALLBACK PATH ────────────────────────────────────────────────────
+        # Swimlanes are safe here because each type's methods stay inside
+        # their own lane — no structured blocks cross lane boundaries.
+        pass  # no extra skinparams needed for fallback swimlane path
+
+        out.append(":Approximate flow - no call chain data available;")
+        out.append("")
+
+        any_emitted = False
+        for type_id in sorted_type_ids:
+            type_name = active_types[type_id].get("name", type_id)
+            lane_name = re.sub(r"[^\w ]", "", type_name).strip() or "System"
+
+            type_methods = [
+                m for m in methods_by_type.get(type_id, [])
+                if not m.get("is_constructor")
+                and not _is_dunder(m.get("name", ""))
+                and m.get("visibility", "public") != "private"
+                and not any(m.get("name", "").startswith(p) for p in _TRIVIAL_PFXS)
+                and m.get("name", "").lower() not in _TRIVIAL_NAMES
+            ]
+            if not type_methods:
+                continue
+
+            out.append(f"|{lane_name}|")
+            any_emitted = True
+
+            for m in type_methods[:6]:
+                mname  = m.get("name", "method")
+                mid    = m.get("_id", "")
+                action = _fmt_action(mid, mname, type_name)
+
+                out.append(f":{action};")
+
+        if not any_emitted:
+            out.append("|System|")
+            out.append(":No public methods found;")
+
+    out.append("")
+    out.append("stop")
     out.append("")
     out.append("@enduml")
     return "\n".join(out)

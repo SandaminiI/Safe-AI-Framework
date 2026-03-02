@@ -78,3 +78,41 @@ def update_plugin_trust(db, plugin_id: str) -> Plugin | None:
 
     db.commit()
     return plugin
+
+
+def calculate_trust_score(db, plugin_id: str, current_score: float) -> float:
+    """
+    Calculate trust score based on plugin history.
+    Used by Station 1 during JWT issuance.
+    """
+    window_start = datetime.now(UTC) - timedelta(seconds=TRUST_WINDOW_SECONDS)
+
+    total = db.execute(
+        select(func.count(RequestLog.id)).where(
+            RequestLog.plugin_id == plugin_id,
+            RequestLog.created_at >= window_start,
+        )
+    ).scalar_one()
+
+    if total == 0:
+        return current_score
+
+    errors = db.execute(
+        select(func.count(RequestLog.id)).where(
+            RequestLog.plugin_id == plugin_id,
+            RequestLog.created_at >= window_start,
+            RequestLog.error_flag == True,  # noqa
+        )
+    ).scalar_one()
+
+    error_rate = errors / float(total)
+
+    # Simple scoring: reduce score based on error rate
+    if error_rate > 0.5:
+        return _clamp(current_score - 20.0, TRUST_MIN, TRUST_MAX)
+    elif error_rate > 0.2:
+        return _clamp(current_score - 10.0, TRUST_MIN, TRUST_MAX)
+    elif error_rate == 0.0 and total > 5:
+        return _clamp(current_score + 5.0, TRUST_MIN, TRUST_MAX)
+    
+    return current_score

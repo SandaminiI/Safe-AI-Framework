@@ -20,6 +20,7 @@ Features:
   - Abstract class detection (ABC, abc.ABC, abstractmethod)
   - Modifier flags (is_static via @staticmethod/@classmethod, is_abstract)
   - Ordered CALLS extraction for sequence diagrams
+  - Module-level singleton variable resolution (e.g. db_manager = DatabaseManager())
   - Skips invalid files during project parsing and collects errors
 """
 
@@ -77,40 +78,27 @@ _OPTIONAL_PREFIXES = (
 # ---------------------------------------------------------------------------
 
 def _resolve_annotation(annotation: Optional[ast.expr]) -> Tuple[str, str, Optional[str]]:
-    """
-    Convert an AST annotation node to (logical_type, raw_type, multiplicity).
-
-    logical_type  – the element type name used for association lookups
-    raw_type      – the full annotation string (for display)
-    multiplicity  – "1", "0..1", "1..*", "0..*", or None
-    """
     if annotation is None:
         return "Any", "Any", None
-
     try:
         raw = ast.unparse(annotation)
     except Exception:
         return "Any", "Any", None
-
     return _resolve_annotation_str(raw)
 
 
 def _resolve_annotation_str(raw: str) -> Tuple[str, str, Optional[str]]:
-    """Resolve a string annotation form."""
     s = raw.strip()
 
-    # Dict / Mapping → no useful single inner type
     for prefix in _DICT_PREFIXES:
         if s.startswith(prefix) and s.endswith("]"):
             return "Any", s, "0..*"
 
-    # Optional[X]
     if s.startswith("Optional[") and s.endswith("]"):
         inner = s[len("Optional["):-1].strip()
         logical = inner.split("[")[0].split(".")[-1]
         return logical, s, "0..1"
 
-    # Union[X, None]  (common form of Optional)
     if s.startswith("Union[") and s.endswith("]"):
         inner_csv = s[len("Union["):-1].strip()
         parts = [p.strip() for p in inner_csv.split(",")]
@@ -120,16 +108,13 @@ def _resolve_annotation_str(raw: str) -> Tuple[str, str, Optional[str]]:
             return logical, s, "0..1"
         return "None", s, "0..1"
 
-    # List[X], Set[X], etc
     for prefix in _COLLECTION_PREFIXES:
         if s.startswith(prefix) and s.endswith("]"):
             inner = s[len(prefix):-1].strip()
-            # Handle Tuple[X, ...]  → inner is "X, ..."
             inner_base = inner.split(",")[0].strip()
             logical = inner_base.split("[")[0].split(".")[-1]
             return logical, s, "1..*"
 
-    # Fully-qualified name: a.b.C → C
     logical = s.split("[")[0].split(".")[-1]
     return logical, s, "1"
 
@@ -151,7 +136,6 @@ def _visibility_from_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _method_flags(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Tuple[bool, bool, bool]:
-    """Returns (is_static, is_abstract, is_classmethod)."""
     is_static = False
     is_abstract = False
     is_classmethod = False
@@ -170,7 +154,6 @@ def _method_flags(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Tuple[bool, b
 
 
 def _class_flags(node: ast.ClassDef) -> Tuple[bool, bool]:
-    """Returns (is_abstract, is_dataclass)."""
     is_abstract = False
     is_dataclass = False
     for base in node.bases:
@@ -192,11 +175,6 @@ def _class_flags(node: ast.ClassDef) -> Tuple[bool, bool]:
 
 
 def _is_abc_interface(node: ast.ClassDef) -> bool:
-    """
-    Heuristic: treat a class as 'interface-like' if:
-      - it subclasses ABC (or abc.ABC)
-      - ALL public methods are decorated @abstractmethod
-    """
     is_abstract, _ = _class_flags(node)
     if not is_abstract:
         return False
@@ -209,23 +187,53 @@ def _is_abc_interface(node: ast.ClassDef) -> bool:
         return False
     return all(_method_flags(m)[1] for m in methods)
 
+def _extract_module_vars(tree: ast.Module) -> Dict[str, str]:
+    """
+    Scan module-level statements for singleton/instance assignments of the form:
+        var_name = ClassName()
+        var_name = module.ClassName()
+
+    Returns a dict mapping variable name → class name, e.g.:
+        {"db_manager": "DatabaseManager", "sms_service": "StudentManagementService"}
+
+    This enables resolution of CALLS like `db_manager.insert(...)` where
+    db_manager is not a self-field or parameter but a module-level singleton.
+    """
+    module_vars: Dict[str, str] = {}
+
+    for node in ast.iter_child_nodes(tree):
+        # Only look at top-level assignments (not inside classes or functions)
+        if not isinstance(node, ast.Assign):
+            continue
+
+        # RHS must be a constructor call: ClassName() or module.ClassName()
+        if not isinstance(node.value, ast.Call):
+            continue
+
+        func = node.value.func
+        if isinstance(func, ast.Name):
+            class_name = func.id
+        elif isinstance(func, ast.Attribute):
+            class_name = func.attr  # e.g. module.ClassName → "ClassName"
+        else:
+            continue
+
+        # Only capture if the class name looks like a class (PascalCase)
+        if not class_name or not class_name[0].isupper():
+            continue
+
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                module_vars[target.id] = class_name
+
+    return module_vars
+
 
 # ---------------------------------------------------------------------------
 # CALLS extraction
 # ---------------------------------------------------------------------------
 
 def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List[Dict[str, Any]]:
-    """
-    Walk a function/method body and collect ordered call sites.
-
-    Returns list of:
-        {
-          "qualifier_kind": "none|self|cls|super|new|var",
-          "qualifier":      str,    # receiver or class name
-          "member":         str,    # method name being called
-          "order":          int
-        }
-    """
     calls: List[Dict[str, Any]] = []
     order_counter = [0]
 
@@ -237,7 +245,6 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
                 value = func_node.value
                 member = func_node.attr
 
-                # super().method()
                 if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "super":
                     calls.append({
                         "qualifier_kind": "super",
@@ -247,7 +254,6 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
                     })
                     order_counter[0] += 1
 
-                # self.method()
                 elif isinstance(value, ast.Name) and value.id == "self":
                     calls.append({
                         "qualifier_kind": "self",
@@ -257,7 +263,6 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
                     })
                     order_counter[0] += 1
 
-                # cls.method()
                 elif isinstance(value, ast.Name) and value.id == "cls":
                     calls.append({
                         "qualifier_kind": "cls",
@@ -267,7 +272,6 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
                     })
                     order_counter[0] += 1
 
-                # SomeClass.method() or var.method()
                 elif isinstance(value, ast.Name):
                     name = value.id
                     kind = "var" if name[:1].islower() else "static"
@@ -280,7 +284,6 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
                     order_counter[0] += 1
 
             elif isinstance(func_node, ast.Name):
-                # Plain function / constructor call: ClassName() or func()
                 name = func_node.id
                 kind = "new" if name[:1].isupper() else "none"
                 calls.append({
@@ -291,7 +294,6 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
                 })
                 order_counter[0] += 1
 
-            # Continue visiting inside the call node
             self.generic_visit(node)
 
     CallVisitor().visit(func)
@@ -305,16 +307,10 @@ def _extract_ordered_calls(func: ast.FunctionDef | ast.AsyncFunctionDef) -> List
 def _extract_init_self_fields(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> List[Dict[str, Any]]:
-    """
-    Walk __init__ body and collect:
-      self.x = expr                → field 'x', type inferred or 'Any'
-      self.x: SomeType = expr     → field 'x', type from annotation
-    """
     fields: List[Dict[str, Any]] = []
     seen: set = set()
 
     for stmt in ast.walk(func):
-        # self.x: Type = value
         if isinstance(stmt, ast.AnnAssign):
             target = stmt.target
             if (
@@ -333,7 +329,6 @@ def _extract_init_self_fields(
                         "multiplicity": mult,
                     })
 
-        # self.x = value  (no annotation)
         elif isinstance(stmt, ast.Assign):
             for tgt in stmt.targets:
                 if (
@@ -344,7 +339,6 @@ def _extract_init_self_fields(
                     name = tgt.attr
                     if name not in seen:
                         seen.add(name)
-                        # Try to infer type from the RHS
                         logical, raw, mult = _infer_rhs_type(stmt.value)
                         fields.append({
                             "name": name,
@@ -357,9 +351,6 @@ def _extract_init_self_fields(
 
 
 def _infer_rhs_type(value: ast.expr) -> Tuple[str, str, Optional[str]]:
-    """
-    Best-effort RHS type inference for self-assignments.
-    """
     if isinstance(value, ast.Constant):
         t = type(value.value).__name__
         return t, t, "1"
@@ -390,16 +381,12 @@ class PythonAdapter:
     Python → CIRGraph builder.
 
     Public API (mirrors JavaAdapter):
-      parse_to_ast(code)                  → ast.Module
+      parse_to_ast(code)                        → ast.Module
       build_cir_graph_for_code(code, filename)  → CIRGraph
-      build_cir_graph_for_files(files)    → CIRGraph  (multi-file / project)
+      build_cir_graph_for_files(files)          → CIRGraph  (multi-file / project)
     """
 
     language = "python"
-
-    # ------------------------------------------------------------------
-    # Entry points
-    # ------------------------------------------------------------------
 
     def parse_to_ast(self, code: str) -> ast.Module:
         try:
@@ -414,30 +401,38 @@ class PythonAdapter:
         code: str,
         filename: Optional[str] = None,
     ) -> CIRGraph:
-        """Single-file parse → CIR (matches JavaAdapter interface)."""
         graph = CIRGraph()
         type_nodes: Dict[str, str] = {}
         units: List[Dict[str, Any]] = []
-
         self._process_module(code, graph, type_nodes, units, source_file=filename)
         self._add_relationship_edges(graph, type_nodes, units)
         return graph
 
     def build_cir_graph_for_files(self, files: List[str]) -> CIRGraph:
-        """
-        Multi-file / project-level CIRGraph builder.
-        Skips invalid Python files but continues with the rest.
-        """
         graph = CIRGraph()
         type_nodes: Dict[str, str] = {}
         units: List[Dict[str, Any]] = []
         errors: List[Dict[str, str]] = []
 
+        all_module_vars: Dict[str, str] = {}
         for path in files:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     code = f.read()
-                self._process_module(code, graph, type_nodes, units, source_file=path)
+                tree = self.parse_to_ast(code)
+                all_module_vars.update(_extract_module_vars(tree))
+            except Exception:
+                pass  # errors will be caught in the main loop below
+
+        for path in files:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    code = f.read()
+                self._process_module(
+                    code, graph, type_nodes, units,
+                    source_file=path,
+                    project_module_vars=all_module_vars, 
+                )
             except ValueError as e:
                 errors.append({"file": path, "error": str(e)})
             except Exception as e:
@@ -447,10 +442,6 @@ class PythonAdapter:
         graph.g.graph["parse_errors"] = errors
         return graph
 
-    # ------------------------------------------------------------------
-    # Core processing: one module → nodes + raw unit dict
-    # ------------------------------------------------------------------
-
     def _process_module(
         self,
         code: str,
@@ -458,10 +449,10 @@ class PythonAdapter:
         type_nodes: Dict[str, str],
         units: List[Dict[str, Any]],
         source_file: Optional[str] = None,
+        project_module_vars: Optional[Dict[str, str]] = None,
     ) -> None:
         tree = self.parse_to_ast(code)
 
-        # Derive module name from file path (e.g. "shop/order.py" → "shop.order")
         module_name: Optional[str] = None
         if source_file:
             rel = source_file.replace(os.sep, "/")
@@ -469,17 +460,17 @@ class PythonAdapter:
                 rel = rel[:-3]
             module_name = rel.replace("/", ".")
 
-        # Walk top-level class definitions only
-        # (nested classes are NOT extracted — mirrors JavaAdapter approach)
+        local_vars = _extract_module_vars(tree)
+        if project_module_vars is not None:
+            module_vars = {**local_vars, **project_module_vars}
+        else:
+            module_vars = local_vars
+
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-
-            # Only process top-level classes (parent is the module)
-            # Check by seeing if any parent is a ClassDef (skip nested)
             if _is_nested_in_class(node, tree):
                 continue
-
             self._process_class(
                 node,
                 graph,
@@ -487,8 +478,8 @@ class PythonAdapter:
                 units,
                 module_name=module_name,
                 source_file=source_file,
+                module_vars=module_vars,
             )
-
     def _process_class(
         self,
         node: ast.ClassDef,
@@ -497,20 +488,15 @@ class PythonAdapter:
         units: List[Dict[str, Any]],
         module_name: Optional[str],
         source_file: Optional[str],
+        module_vars: Optional[Dict[str, str]] = None,
     ) -> None:
         short_name = node.name
         full_name = f"{module_name}.{short_name}" if module_name else short_name
 
-        # Determine kind
         is_abstract_class, is_dataclass = _class_flags(node)
         is_interface_like = _is_abc_interface(node)
 
-        if is_interface_like:
-            kind = "interface"
-        elif is_abstract_class:
-            kind = "class"  # abstract class, but still rendered as 'class'
-        else:
-            kind = "class"
+        kind = "interface" if is_interface_like else "class"
 
         type_id = f"type:{full_name}"
 
@@ -518,7 +504,7 @@ class PythonAdapter:
             id=type_id,
             name=short_name,
             kind=kind,
-            visibility="public",  # Python classes are always public at module level
+            visibility="public",
             package=module_name,
             modifiers=("abstract",) if is_abstract_class else (),
             is_abstract=is_abstract_class,
@@ -533,15 +519,14 @@ class PythonAdapter:
             "full_name": full_name,
             "fields": [],
             "methods": [],
-            "extends": [],      # parent class names
-            "implements": [],   # ABC bases (will be treated as IMPLEMENTS)
+            "extends": [],
+            "implements": [],
             "calls": [],
             "source_file": source_file,
+            "module_vars": module_vars or {},
         }
 
-        # ----------------------------------------------------------------
-        # Bases  → extends / implements
-        # ----------------------------------------------------------------
+        # ---- Bases ----
         for base in node.bases:
             try:
                 bname = ast.unparse(base).strip()
@@ -551,14 +536,11 @@ class PythonAdapter:
                 continue
             short_bname = bname.split(".")[-1]
             if short_bname in ("ABC",):
-                # Mark as implements (interface)
                 unit["implements"].append(short_bname)
             else:
                 unit["extends"].append(short_bname)
 
-        # ----------------------------------------------------------------
-        # Class-level annotated attributes  (PEP 526)
-        # ----------------------------------------------------------------
+        # ---- Class-level annotated attributes ----
         class_fields_seen: set = set()
         for stmt in node.body:
             if isinstance(stmt, ast.AnnAssign):
@@ -592,9 +574,7 @@ class PythonAdapter:
                     "multiplicity": mult,
                 })
 
-        # ----------------------------------------------------------------
-        # Methods
-        # ----------------------------------------------------------------
+        # ---- Methods ----
         for stmt in node.body:
             if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -605,7 +585,6 @@ class PythonAdapter:
             is_constructor = (mname == "__init__")
             vis_m = _visibility_from_name(mname)
 
-            # Return type
             logical_ret, raw_ret, _ = _resolve_annotation(func.returns)
 
             method_id = f"method:{full_name}:{mname}"
@@ -663,13 +642,12 @@ class PythonAdapter:
                 "is_constructor": is_constructor,
             })
 
-            # ---- __init__ self-assignments ----
-            # Extract instance fields from __init__ body (self.x = ...)
+            # __init__ self-assignments
             if is_constructor:
                 for finfo in _extract_init_self_fields(func):
                     fname = finfo["name"]
                     if fname in class_fields_seen:
-                        continue  # Already captured as class-level annotation
+                        continue
                     class_fields_seen.add(fname)
 
                     field_id = f"field:{full_name}:{fname}"
@@ -697,20 +675,13 @@ class PythonAdapter:
 
         units.append(unit)
 
-    # ------------------------------------------------------------------
-    # Relationship edge resolution  (mirrors JavaAdapter._add_relationship_edges)
-    # ------------------------------------------------------------------
-
     def _add_relationship_edges(
         self,
         graph: CIRGraph,
         type_nodes: Dict[str, str],
         units: List[Dict[str, Any]],
     ) -> None:
-        # full_name → type_id
         full_to_id: Dict[str, str] = dict(type_nodes)
-
-        # short_name → list of candidate type_ids  (for resolution)
         short_to_ids: Dict[str, List[str]] = {}
         id_to_full: Dict[str, str] = {}
 
@@ -724,22 +695,18 @@ class PythonAdapter:
             return ".".join(parts[:-1]) if len(parts) > 1 else ""
 
         def resolve_type(tname: str, src_id: str) -> Optional[str]:
-            # 1) direct full-name match
             if tname in full_to_id:
                 return full_to_id[tname]
-            # 2) short name
             candidates = short_to_ids.get(tname)
             if not candidates:
                 return None
             if len(candidates) == 1:
                 return candidates[0]
-            # 3) prefer same package
             src_full = id_to_full.get(src_id, "")
             src_pkg = _pkg(src_full)
             same_pkg = [c for c in candidates if _pkg(id_to_full.get(c, "")) == src_pkg]
             return same_pkg[0] if len(same_pkg) == 1 else None
 
-        # method lookup: (type_id, method_name) → method_id
         method_index: Dict[Tuple[str, str], str] = {}
         for u in units:
             owner_type_id = u["id"]
@@ -752,7 +719,7 @@ class PythonAdapter:
         for u in units:
             src_id = u["id"]
 
-            # ---- INHERITS / IMPLEMENTS ----
+            # INHERITS / IMPLEMENTS
             for base_name in u.get("extends", []):
                 target = resolve_type(base_name, src_id)
                 if target and target != src_id:
@@ -763,7 +730,7 @@ class PythonAdapter:
                 if target and target != src_id:
                     graph.add_edge(src_id, target, "IMPLEMENTS")
 
-            # ---- ASSOCIATES (field types pointing to other classes) ----
+            # ASSOCIATES
             for f in u.get("fields", []):
                 tname = f.get("element_type")
                 mult = f.get("multiplicity")
@@ -773,7 +740,7 @@ class PythonAdapter:
                 if target and target != src_id:
                     graph.add_edge(src_id, target, "ASSOCIATES", multiplicity=mult)
 
-            # ---- DEPENDS_ON (parameter types + return types) ----
+            # DEPENDS_ON
             for m in u.get("methods", []):
                 for p in m.get("params", []):
                     tname = p.get("type_name")
@@ -782,19 +749,20 @@ class PythonAdapter:
                     target = resolve_type(tname, src_id)
                     if target and target != src_id:
                         graph.add_edge(src_id, target, "DEPENDS_ON")
-
                 rtype = m.get("return_type")
                 if rtype and rtype not in _PRIMITIVE_TYPES:
                     target = resolve_type(rtype, src_id)
                     if target and target != src_id:
                         graph.add_edge(src_id, target, "DEPENDS_ON")
 
-            # ---- CALLS (method → method, ordered) ----
+            # CALLS
             field_type_by_name: Dict[str, str] = {
                 f["name"]: f["element_type"]
                 for f in u.get("fields", [])
                 if f.get("name") and f.get("element_type")
             }
+
+            module_vars: Dict[str, str] = u.get("module_vars", {})
 
             method_param_types: Dict[str, Dict[str, str]] = {}
             for m in u.get("methods", []):
@@ -820,7 +788,6 @@ class PythonAdapter:
                 target_type_id = src_id
 
                 if qkind == "super":
-                    # Call to parent — use first INHERITS target if resolvable
                     extends = u.get("extends", [])
                     if extends:
                         t = resolve_type(extends[0], src_id)
@@ -834,10 +801,15 @@ class PythonAdapter:
                     target_type_id = t
 
                 elif qkind == "var":
-                    # Determine type of the variable (field or parameter)
+                    # Resolution priority:
+                    #   1. self-fields (self.db_manager = DatabaseManager())
+                    #   2. method parameters
+                    #   3. module-level singleton variables 
                     var_type = field_type_by_name.get(qual)
                     if not var_type:
                         var_type = method_param_types.get(src_method_id, {}).get(qual)
+                    if not var_type:
+                        var_type = module_vars.get(qual)
                     if not var_type:
                         continue
                     t = resolve_type(var_type, src_id)
@@ -845,10 +817,7 @@ class PythonAdapter:
                         continue
                     target_type_id = t
 
-                elif qkind == "self":
-                    target_type_id = src_id
-
-                elif qkind == "cls":
+                elif qkind in ("self", "cls"):
                     target_type_id = src_id
 
                 dst_method_id = method_index.get((target_type_id, member))
@@ -863,7 +832,6 @@ class PythonAdapter:
 # ---------------------------------------------------------------------------
 
 def _is_nested_in_class(target: ast.ClassDef, tree: ast.Module) -> bool:
-    """Return True if `target` is a nested class (defined inside another class body)."""
     for node in ast.walk(tree):
         if node is target:
             continue

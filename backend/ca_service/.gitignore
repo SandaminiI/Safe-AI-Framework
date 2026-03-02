@@ -32,3 +32,6 @@ Thumbs.db
 
 # CA keys/certs (never commit private keys)
 keys/
+
+
+ca_service.db

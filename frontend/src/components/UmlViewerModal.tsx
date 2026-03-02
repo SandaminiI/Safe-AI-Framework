@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { X, Box, Boxes, GitBranch, Eye } from "lucide-react";
-
-export type DiagramType = "class" | "package" | "sequence" | "component";
+import { X, Box, Boxes, GitBranch, Eye, Download, Activity } from "lucide-react";
+export type DiagramType = "class" | "package" | "sequence" | "component" | "activity";
 
 type UmlValidation = {
   ok: boolean;
@@ -16,6 +15,7 @@ type UmlReport = {
   package_svg?: string | null;
   sequence_svg?: string | null;
   component_svg?: string | null;
+  activity_svg?: string | null;
   validation?: Partial<Record<DiagramType, UmlValidation>>;
 };
 
@@ -43,6 +43,86 @@ function errMsg(e: unknown): string {
   }
 }
 
+// Download the raw SVG string as a .svg file.
+function downloadSvg(svgString: string, filename: string) {
+  const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Convert the SVG string to a PNG and trigger download
+function downloadPng(svgString: string, filename: string, containerEl: HTMLElement | null) {
+  // --- 1. Parse the SVG to discover its natural dimensions ---
+  const parser  = new DOMParser();
+  const svgDoc  = parser.parseFromString(svgString, "image/svg+xml");
+  const svgEl   = svgDoc.documentElement as unknown as SVGSVGElement;
+
+  let width  = 0;
+  let height = 0;
+
+  const wAttr = svgEl.getAttribute("width");
+  const hAttr = svgEl.getAttribute("height");
+  if (wAttr && hAttr) {
+    width  = parseFloat(wAttr);
+    height = parseFloat(hAttr);
+  }
+
+  // Fall back to viewBox
+  if ((!width || !height) && svgEl.getAttribute("viewBox")) {
+    const vb = svgEl.getAttribute("viewBox")!.split(/[\s,]+/);
+    width  = parseFloat(vb[2]);
+    height = parseFloat(vb[3]);
+  }
+
+  if ((!width || !height) && containerEl) {
+    const rect = containerEl.getBoundingClientRect();
+    width  = rect.width  || 800;
+    height = rect.height || 600;
+  }
+
+  if (!width || !height) { width = 800; height = 600; }
+
+  // --- 2. Render to canvas at 2× for retina sharpness ---
+  const scale   = 2;
+  const canvas  = document.createElement("canvas");
+  canvas.width  = width  * scale;
+  canvas.height = height * scale;
+  const ctx     = canvas.getContext("2d")!;
+  ctx.scale(scale, scale);
+
+  // --- 3. Draw the SVG via an Image ---
+  const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+  const url     = URL.createObjectURL(svgBlob);
+  const img     = new Image();
+
+  img.onload = () => {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const a    = document.createElement("a");
+      a.href     = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, "image/png");
+  };
+
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    downloadSvg(svgString, filename.replace(".png", ".svg"));
+  };
+
+  img.src = url;
+}
+
+// Main UML Viewer Modal component
 export default function UmlViewerModal({
   open,
   uml,
@@ -73,8 +153,8 @@ export default function UmlViewerModal({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
-  // prevent duplicate in-flight requests per tab
   const inflightRef = useRef<Partial<Record<DiagramType, boolean>>>({});
+  const svgContainerRef = useRef<HTMLDivElement>(null);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const validation = uml?.validation || {};
@@ -87,6 +167,7 @@ export default function UmlViewerModal({
         package: uml?.package_svg ?? null,
         sequence: uml?.sequence_svg ?? null,
         component: uml?.component_svg ?? null,
+        activity: uml?.activity_svg  ?? null,
       }) as Record<DiagramType, string | null>,
     [uml]
   );
@@ -98,12 +179,13 @@ export default function UmlViewerModal({
         package: aiStore.package?.svg ?? null,
         sequence: aiStore.sequence?.svg ?? null,
         component: aiStore.component?.svg ?? null,
+        activity: aiStore.activity?.svg ?? null,  // ← NEW
       }) as Record<DiagramType, string | null>,
     [aiStore]
   );
 
   const hasAnyAi = useMemo(
-    () => Boolean(aiSvgs.class || aiSvgs.package || aiSvgs.sequence || aiSvgs.component),
+    () => Boolean(aiSvgs.class || aiSvgs.package || aiSvgs.sequence || aiSvgs.component || aiSvgs.activity),
     [aiSvgs]
   );
 
@@ -178,6 +260,18 @@ export default function UmlViewerModal({
     void generateAiFor(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, source, tab]);
+
+  // ── Download handler ────────────────────────────────────────────────────────
+  const handleDownload = (format: "svg" | "png") => {
+    if (!activeSvg) return;
+    const sourcePart = effectiveSource === "ai" ? "ai" : "rule";
+    const base       = `uml_${sourcePart}_${tab}`;
+    if (format === "svg") {
+      downloadSvg(activeSvg, `${base}.svg`);
+    } else {
+      downloadPng(activeSvg, `${base}.png`, svgContainerRef.current);
+    }
+  };
 
   if (!open || !uml || uml.error) return null;
 
@@ -294,6 +388,11 @@ export default function UmlViewerModal({
               </button>
             </div>
 
+            {/* Download button */}
+            {activeSvg && (
+              <DownloadMenu onDownload={handleDownload} />
+            )}
+
             <button
               onClick={onClose}
               style={{
@@ -368,6 +467,13 @@ export default function UmlViewerModal({
             disabled={!tabEnabled("component")}
             onClick={() => setTab("component")}
           />
+          <TabButton
+            label="Activity Diagram"
+            icon={<Activity size={16} />}
+            active={tab === "activity"}
+            disabled={!tabEnabled("activity")}
+            onClick={() => setTab("activity")}
+          />
         </div>
 
         {/* Content */}
@@ -376,6 +482,7 @@ export default function UmlViewerModal({
             <DiagramCard
               title={`${effectiveSource === "ai" ? "AI" : "Rule"} • ${tab.toUpperCase()} Diagram`}
               svg={activeSvg}
+              containerRef={svgContainerRef}
             />
           ) : effectiveSource === "rule" ? (
             <ValidationCard title={`${tab.toUpperCase()} Diagram`} info={vinfo(tab)} />
@@ -396,6 +503,110 @@ export default function UmlViewerModal({
     </div>
   );
 }
+
+// ─── Download dropdown menu ───────────────────────────────────────────────────
+
+function DownloadMenu({ onDownload }: { onDownload: (fmt: "svg" | "png") => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close when clicking outside
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Download diagram"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "8px 12px",
+          border: "1px solid #e2e8f0",
+          borderRadius: 10,
+          background: open ? "#f0fdf4" : "#ffffff",
+          color: open ? "#166534" : "#475569",
+          fontWeight: 600,
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+      >
+        <Download size={15} />
+        Download
+        <span style={{ fontSize: 10, marginLeft: 2 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            background: "#ffffff",
+            border: "1px solid #e2e8f0",
+            borderRadius: 10,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+            minWidth: 160,
+            zIndex: 50,
+            overflow: "hidden",
+          }}
+        >
+          <button
+            onClick={() => { onDownload("svg"); setOpen(false); }}
+            style={menuItemStyle}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#f0f9ff")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <span style={{ fontSize: 16 }}>🖼</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "#0f172a" }}>SVG</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Vector · scales perfectly</div>
+            </div>
+          </button>
+
+          <div style={{ height: 1, background: "#f1f5f9", margin: "0 10px" }} />
+
+          <button
+            onClick={() => { onDownload("png"); setOpen(false); }}
+            style={menuItemStyle}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#f0f9ff")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <span style={{ fontSize: 16 }}>📷</span>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "#0f172a" }}>PNG</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Raster · 2× retina</div>
+            </div>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const menuItemStyle: React.CSSProperties = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 14px",
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function TabButton({
   label,
@@ -436,7 +647,15 @@ function TabButton({
   );
 }
 
-function DiagramCard({ title, svg }: { title: string; svg: string }) {
+function DiagramCard({
+  title,
+  svg,
+  containerRef,
+}: {
+  title: string;
+  svg: string;
+  containerRef?: React.RefObject<HTMLDivElement | null>;
+}) {
   return (
     <div
       style={{
@@ -455,6 +674,7 @@ function DiagramCard({ title, svg }: { title: string; svg: string }) {
       </div>
 
       <div
+        ref={containerRef}
         className="uml-svg"
         style={{
           flex: 1,

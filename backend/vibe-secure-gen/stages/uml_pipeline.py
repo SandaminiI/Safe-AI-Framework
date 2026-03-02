@@ -10,9 +10,7 @@ UML pipeline entry point used by pipeline.py.
 - Generates diagrams via rule-based (uml-gen-regex) and AI-based (uml-gen-ai)
 - Returns a unified report
 
-Terminal output uses ANSI colour / box-drawing so every backend stage is clearly
-visible in the server log with step numbers, status symbols, timings, and a final
-summary table.
+Diagram types: class, package, sequence, component, activity
 """
 from __future__ import annotations
 
@@ -35,7 +33,7 @@ RENDER_URL         = "http://127.0.0.1:7090/render/svg"
 
 _SUPPORTED_LANGUAGES = {"java", "python"}
 _EXT_TO_LANG: Dict[str, str] = {".java": "java", ".py": "python"}
-_DIAGRAM_TYPES = ("class", "package", "sequence", "component")
+_DIAGRAM_TYPES = ("class", "package", "sequence", "component", "activity")
 
 # Diagram-type icons shown in terminal
 _DTYPE_ICON = {
@@ -43,6 +41,7 @@ _DTYPE_ICON = {
     "package":   "⬡",
     "sequence":  "⟿",
     "component": "⬢",
+    "activity":  "⬟",
 }
 
 
@@ -55,7 +54,6 @@ class _T:
     RESET   = "\033[0m"
     BOLD    = "\033[1m"
     DIM     = "\033[2m"
-    # foreground colours
     CYAN    = "\033[96m"
     BLUE    = "\033[94m"
     GREEN   = "\033[92m"
@@ -194,7 +192,7 @@ def _elapsed(t0: float) -> str:
 
 def _parse_project_to_cir(
     lang: str,
-    files: Dict[str, str],  # rel_path → abs_path
+    files: Dict[str, str],
     step_n: int,
     step_total: int,
 ) -> Dict[str, Any]:
@@ -402,8 +400,8 @@ def _cir_to_uml_ai(
 
         lines_count = plantuml.count("\n") + 1 if plantuml.strip() else 0
 
-        if not ok_flag or not plantuml.strip():
-            _warn("LLM output invalid or empty",
+        if not plantuml.strip():
+            _warn("LLM output empty",
                   f"{gen_time}  ·  {len(errs)} error(s)")
             for e_msg in errs[:3]:
                 _sub(f"  {e_msg}", indent=8)
@@ -411,8 +409,15 @@ def _cir_to_uml_ai(
             _divider()
             continue
 
-        _ok("PlantUML generated",
-            f"{lines_count} lines  ·  LLM inference  ·  {gen_time}")
+        # Log a soft warning if ok_flag is False but we still have content
+        if not ok_flag:
+            _warn("LLM validation warnings (attempting render anyway)",
+                  f"{gen_time}  ·  {len(errs)} error(s)")
+            for e_msg in errs[:3]:
+                _sub(f"  {e_msg}", indent=8)
+        else:
+            _ok("PlantUML generated",
+                f"{lines_count} lines  ·  LLM inference  ·  {gen_time}")
 
         # ── SVG render ────────────────────────────────────────────────────────
         _info("POST /render/svg", f"uml-renderer :7090  →  {RENDER_URL}")
@@ -627,8 +632,8 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 "package_svg":   uml_rule.get("package_svg"),
                 "sequence_svg":  uml_rule.get("sequence_svg"),
                 "component_svg": uml_rule.get("component_svg"),
+                "activity_svg":  uml_rule.get("activity_svg"),
                 "validation":    uml_rule.get("validation", {}),
-                # Both pipelines for comparison view
                 "rule_based":    uml_rule,
                 "ai":            uml_ai,
             }
@@ -658,6 +663,7 @@ def _error_result(msg: str, file_count: int = 0) -> Dict[str, Any]:
         "package_svg":   None,
         "sequence_svg":  None,
         "component_svg": None,
+        "activity_svg":  None,
         "validation":    {},
         "rule_based":    {},
         "ai":            {},

@@ -62,3 +62,52 @@ def issue_jwt(plugin_id: str, role: str, declared_intent: str, trust_score: floa
 
 def verify_jwt_token(token: str) -> Dict[str, Any]:
     return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+
+
+def issue_jwt_with_intent(
+    plugin_id: str,
+    intent: str,
+    scope: str,
+    trust_score: float,
+    cert_serial: str = ""
+) -> str:
+    """
+    Issue JWT with intent-bound claims for Station 1.
+    Includes: plugin_id, intent, scope, trust_score, cert_serial
+    """
+    now = int(datetime.now(UTC).timestamp())
+    payload = {
+        "sub": plugin_id,
+        "intent": intent,  # read, write, execute
+        "scope": scope,  # public, protected, private
+        "trust_score": trust_score,
+        "cert_serial": cert_serial,
+        "iat": now,
+        "exp": now + JWT_TTL_SECONDS,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def verify_jwt_with_intent(token: str) -> Dict[str, Any]:
+    """
+    Verify JWT and return payload with intent-bound claims.
+    Used by Station 2 for access control.
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        
+        # Validate required fields
+        if "sub" not in payload:
+            raise ValueError("JWT missing 'sub' (plugin_id)")
+        if "intent" not in payload:
+            raise ValueError("JWT missing 'intent'")
+        if "scope" not in payload:
+            raise ValueError("JWT missing 'scope'")
+        if "trust_score" not in payload:
+            raise ValueError("JWT missing 'trust_score'")
+        
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise ValueError("JWT token expired")
+    except jwt.InvalidTokenError as e:
+        raise ValueError(f"Invalid JWT: {str(e)}")
