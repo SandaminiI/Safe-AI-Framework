@@ -34,6 +34,7 @@ export default function PluginRegistryPage() {
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +75,17 @@ export default function PluginRegistryPage() {
     };
   }, []);
 
+  const filteredPlugins = plugins.filter((p) => {
+    if (!filter) return true;
+    // 'ALL PLUGINS' card should show everything when selected
+    if (filter === "ALL PLUGINS") return true;
+    if (filter === "ACTIVE") return p.status === "trusted";
+    if (filter === "RESTRICTED") return p.status === "restricted";
+    if (filter === "BLOCKED") return p.status === "blocked" && !p.anomalyFlag;
+    if (filter === "REVOKED") return p.status === "blocked" && Boolean(p.anomalyFlag);
+    return true;
+  });
+
   return (
     <div style={page}>
       <div style={container}>
@@ -81,7 +93,6 @@ export default function PluginRegistryPage() {
         <div style={header}>
           <div>
             <div style={titleRow}>
-              <span style={shield}>🛡</span>
               <h1 style={title}>Plugin Registry & Trust Monitor</h1>
             </div>
             <div style={subtitle}>
@@ -120,7 +131,7 @@ export default function PluginRegistryPage() {
             const revoked = plugins.filter((p) => p.anomalyFlag && p.status === "blocked").length;
 
             const entries: [string, string | number][] = [
-              ["TOTAL PLUGINS", total],
+              ["ALL PLUGINS", total],
               ["AVG TRUST SCORE", avg],
               ["ACTIVE", active],
               ["RESTRICTED", restricted],
@@ -128,12 +139,32 @@ export default function PluginRegistryPage() {
               ["REVOKED", revoked],
             ];
 
-            return entries.map(([label, value], i) => (
-              <div key={i} style={metricCard}>
-                <div style={metricLabel}>{label}</div>
-                <div style={metricValue}>{value}</div>
-              </div>
-            ));
+            const colors = ["", "", "#22c55e", "#f59e0b", "#ef4444", "#ef4444"];
+            const isFilterable = (i: number) => i === 0 || (i >= 2 && i <= 5);
+
+            return entries.map(([label, value], i) => {
+              const active = filter === label;
+              const clickHandler = () => {
+                if (!isFilterable(i)) return;
+                setFilter(active ? null : label);
+              };
+
+              return (
+                <div
+                  key={i}
+                  onClick={clickHandler}
+                  style={{
+                    ...metricCard,
+                    cursor: isFilterable(i) ? "pointer" : "default",
+                    border: active ? "1px solid #7c3aed" : metricCard.border,
+                    background: active ? "#24143a" : metricCard.background,
+                  }}
+                >
+                  <div style={metricLabel}>{label}</div>
+                  <div style={{ ...metricValue, color: colors[i] }}>{value}</div>
+                </div>
+              );
+            });
           })()}
         </div>
 
@@ -150,9 +181,7 @@ export default function PluginRegistryPage() {
         {/* CARD VIEW */}
         {view === "card" && (
           <div style={cardGrid}>
-            {plugins.map((p) => (
-              <PluginCard key={p.id} plugin={p} />
-            ))}
+            {filteredPlugins.map((p) => <PluginCard key={p.id} plugin={p} />)}
           </div>
         )}
 
@@ -172,7 +201,7 @@ export default function PluginRegistryPage() {
                 </tr>
               </thead>
               <tbody>
-                {plugins.map((p) => (
+                {filteredPlugins.map((p) => (
                   <tr key={p.id} style={tr}>
                     <td style={tdId}>{p.id}</td>
 
@@ -271,10 +300,10 @@ function PluginCard({ plugin }: { plugin: Plugin }) {
       </div>
 
       <div style={bottomRow}>
-        <div style={{ opacity: 0.6 }}>
+        <div />
+        <div style={{ opacity: 0.6, textAlign: "right" }}>
           {plugin.reqRate} · Last active: {plugin.lastActive}
         </div>
-        <button style={detailsBtn}>View Details</button>
       </div>
     </div>
   );
@@ -338,10 +367,6 @@ const titleRow = {
   gap: 12,
 };
 
-const shield = {
-  fontSize: 22,
-};
-
 const title = {
   margin: 0,
   fontSize: 26,
@@ -355,37 +380,60 @@ const subtitle = {
 };
 
 const viewSwitch = {
-  display: "flex",
-  gap: 10,
+  display: "inline-flex",
+  gap: 6,
   alignItems: "center",
+  background: "#0f0820",
+  padding: 0,
+  height: 32,
+  borderRadius: 8,
+  border: "1px solid #1e1530",
+  verticalAlign: "middle",
 };
 
 const tab = {
-  padding: "6px 14px",
-  borderRadius: 8,
-  border: "1px solid #4F0C87",
+  padding: "0 14px",
+  height: "100%",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 6,
+  border: "1px solid transparent",
   background: "transparent",
   color: "white",
   cursor: "pointer",
+  outline: "none",
+  boxShadow: "none",
+  transition: "all 120ms ease",
+  minWidth: 88,
 };
 
 const activeTab = {
   ...tab,
   background: "#4F0C87",
+  border: "1px solid rgba(79,12,135,0.2)",
+  color: "#fff",
+  boxShadow: "inset 0 -2px 0 rgba(0,0,0,0.12)",
 };
 
 const metricsGrid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-  gap: 25,
-  marginBottom: 50,
+  gridTemplateColumns: "repeat(6, minmax(120px, 1fr))",
+  gap: 16,
+  marginBottom: 30,
+  alignItems: "stretch",
 };
 
 const metricCard: React.CSSProperties = {
   background: "#1a1335",
-  padding: 25,
-  borderRadius: 20,
+  padding: 18,
+  borderRadius: 12,
   border: "1px solid #2d1f55",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  textAlign: "center",
 };
 
 const metricLabel = {
@@ -395,8 +443,8 @@ const metricLabel = {
 };
 
 const metricValue = {
-  marginTop: 10,
-  fontSize: 24,
+  marginTop: 8,
+  fontSize: 22,
   fontWeight: 700,
 };
 
@@ -457,14 +505,6 @@ const bottomRow = {
   fontSize: 13,
 };
 
-const detailsBtn = {
-  padding: "6px 16px",
-  borderRadius: 10,
-  border: "1px solid #7c3aed",
-  background: "transparent",
-  color: "#c084fc",
-  cursor: "pointer",
-};
 
 const footer = {
   height: 45,
