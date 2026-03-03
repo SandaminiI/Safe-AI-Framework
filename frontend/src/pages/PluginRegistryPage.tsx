@@ -537,10 +537,11 @@ const table: React.CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
   minWidth: 900,
+  textAlign: "center",
 };
 
 const th: React.CSSProperties = {
-  textAlign: "left",
+  textAlign: "center",
   padding: "14px 16px",
   fontSize: 12,
   letterSpacing: 1,
@@ -551,11 +552,13 @@ const td: React.CSSProperties = {
   padding: "18px 16px",
   borderTop: "1px solid #2d1f55",
   fontSize: 14,
+  textAlign: "center",
 };
 
 const tdId: React.CSSProperties = {
   ...td,
   fontWeight: 600,
+  textAlign: "center",
 };
 
 const tr: React.CSSProperties = {
