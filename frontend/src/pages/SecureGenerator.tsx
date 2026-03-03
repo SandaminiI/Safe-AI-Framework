@@ -1,9 +1,10 @@
 // Securegenerator.tsx 
 import { useState } from "react";
 import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
-import { 
-  CheckCircle2, MinusCircle, Workflow, Shield, Sparkles, 
-  Copy, Check, Code2, ChevronDown, Zap, BarChart3, Clock, Settings, ArrowLeft 
+import {
+  CheckCircle2, MinusCircle, Shield, Sparkles,
+  Copy, Check, Code2, ChevronDown, Zap, BarChart3, Clock, Settings, ArrowLeft,
+  Network, Package, GitBranch, Boxes, Activity, Eye,
 } from "lucide-react";
 
 /* ---------- Types (unchanged) ---------- */
@@ -64,7 +65,18 @@ type UmlReport = {
   sequence_svg?: string | null;
   component_svg?: string | null;
   activity_svg?: string | null;
+  ai_class_svg?: string | null;
+  ai_package_svg?: string | null;
+  ai_sequence_svg?: string | null;
+  ai_component_svg?: string | null;
+  ai_activity_svg?: string | null;
+  ai_class_plantuml?: string | null;
+  ai_package_plantuml?: string | null;
+  ai_sequence_plantuml?: string | null;
+  ai_component_plantuml?: string | null;
+  ai_activity_plantuml?: string | null;
   validation?: UmlValidationMap;
+  ai_validation?: UmlValidationMap;
 };
 
 type Report = {
@@ -93,6 +105,40 @@ type ApiResult = {
 /* ---------- API endpoints ---------- */
 const API = "http://localhost:8000/api/generate";
 const UML_AI_API = "http://localhost:7081/uml/ai";
+
+type DiagramMeta = {
+  type: DiagramType;
+  label: string;
+  description: string;
+  svgKey: keyof UmlReport;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Icon: React.ComponentType<any>;
+};
+
+const DIAGRAM_META: DiagramMeta[] = [
+  { type: "class",     label: "Class Diagram",     description: "Classes, fields & relationships", svgKey: "class_svg",     Icon: Network   },
+  { type: "package",   label: "Package Diagram",   description: "Namespace & module structure",    svgKey: "package_svg",   Icon: Package   },
+  { type: "sequence",  label: "Sequence Diagram",  description: "Runtime call interactions",       svgKey: "sequence_svg",  Icon: GitBranch },
+  { type: "component", label: "Component Diagram", description: "Architectural components",        svgKey: "component_svg", Icon: Boxes     },
+  { type: "activity",  label: "Activity Diagram",  description: "Control-flow & method calls",     svgKey: "activity_svg",  Icon: Activity  },
+];
+
+function buildAiCacheFromReport(umlData: UmlReport | undefined): AiUmlStore {
+  if (!umlData) return {};
+  const cache: AiUmlStore = {};
+  const mapping: Array<{ diagType: DiagramType; svgKey: keyof UmlReport; puKey: keyof UmlReport }> = [
+    { diagType: "class",     svgKey: "ai_class_svg",     puKey: "ai_class_plantuml"     },
+    { diagType: "package",   svgKey: "ai_package_svg",   puKey: "ai_package_plantuml"   },
+    { diagType: "sequence",  svgKey: "ai_sequence_svg",  puKey: "ai_sequence_plantuml"  },
+    { diagType: "component", svgKey: "ai_component_svg", puKey: "ai_component_plantuml" },
+    { diagType: "activity",  svgKey: "ai_activity_svg",  puKey: "ai_activity_plantuml"  },
+  ];
+  for (const { diagType, svgKey, puKey } of mapping) {
+    const svg = umlData[svgKey] as string | null | undefined;
+    if (svg) cache[diagType] = { svg, plantuml: (umlData[puKey] as string | null | undefined) ?? undefined };
+  }
+  return cache;
+}
 
 /* ---------- Main Component ---------- */
 export default function Securegenerator() {
@@ -125,6 +171,8 @@ export default function Securegenerator() {
       });
       const data = (await res.json()) as ApiResult;
       setOut(data);
+      const prebuilt = buildAiCacheFromReport(data?.report?.uml);
+      if (Object.keys(prebuilt).length > 0) setAiUmlCache(prebuilt);
     } catch (e) {
       console.error(e);
       alert("Request failed — is the backend running on :8000?");
@@ -142,6 +190,17 @@ export default function Securegenerator() {
 
   const fixSummary = out?.report?.fix_summary;
   const uml = out?.report?.uml;
+
+  const openViewer = () => {
+    if (!uml) return;
+    const defaultTab: DiagramType =
+      uml.class_svg ? "class" :
+      uml.package_svg ? "package" :
+      uml.sequence_svg ? "sequence" :
+      uml.component_svg ? "component" : "activity";
+    setUmlTab(defaultTab);
+    setUmlOpen(true);
+  };
 
   return (
     <div
@@ -293,10 +352,26 @@ export default function Securegenerator() {
             justifyContent: "space-between",
           }}
         >
-          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "#e2e8f0" }}>
-            Secure Code Generator
-          </h1>
-          <div style={{ fontSize: 13, color: "#64748b" }}>•••</div>
+          <div>
+            <h1
+              style={{
+                margin: 0,
+                fontSize: 20,
+                fontWeight: 700,
+                color: "#f1f5f9"
+              }}
+            >
+              Secure Code Generator
+            </h1>
+            <p style={{
+              margin: "4px 0 0",
+              fontSize: 12, 
+              color: "#64748b",
+              }}
+            >
+              AI-powered code generation with security analysis &amp; UML visualization
+            </p>
+          </div>
         </div>
 
         {/* Scrollable Content */}
@@ -414,7 +489,7 @@ export default function Securegenerator() {
                 </div>
               </div>
 
-              {/* UML Diagrams - Always visible when code is generated */}
+              {/* UML Diagrams */}
               {out && (
                 <div
                   style={{
@@ -435,12 +510,11 @@ export default function Securegenerator() {
                       display: "flex",
                       alignItems: "center",
                       gap: 8,
-                    }}
-                  >
-                    <Workflow size={14} color="#ec4899" />
+                    }
+                  }>
+                    <Network size={14} color="#8b5cf6" />
                     UML Diagrams
                   </div>
-
                   {!uml || uml.error ? (
                     <div
                       style={{
@@ -453,9 +527,7 @@ export default function Securegenerator() {
                         textAlign: "center",
                       }}
                     >
-                      {uml?.error
-                        ? `UML generation: ${uml.error}`
-                        : "No UML diagrams available for this generation (e.g. non-Java code)."}
+                      {uml?.error ? `UML generation: ${uml.error}` : "No UML diagrams available for this generation (e.g. non-Java code)."}
                     </div>
                   ) : (
                     <>
@@ -463,60 +535,79 @@ export default function Securegenerator() {
                         style={{
                           display: "grid",
                           gridTemplateColumns: "1fr 1fr",
-                          gap: 12,
-                          marginBottom: 20,
+                          gap: 10,
+                          marginBottom: 18,
                         }}
                       >
-                        {[
-                          { key: "class_svg" as const, label: "Class Diagram" },
-                          { key: "package_svg" as const, label: "Package Diagram" },
-                          { key: "sequence_svg" as const, label: "Sequence Diagram" },
-                          { key: "component_svg" as const, label: "Component Diagram" },
-                          { key: "activity_svg" as const, label: "Activity Diagram" },
-                        ].map(({ key, label }) => (
-                          <div
-                            key={key}
-                            style={{
-                              padding: 12,
-                              background: "#0f1419",
-                              borderRadius: 8,
-                              border: `1px solid ${uml[key] ? "#8b5cf6" : "#2d3548"}`,
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                            }}
-                          >
-                            {uml[key] ? (
-                              <CheckCircle2 size={16} color="#8b5cf6" />
-                            ) : (
-                              <MinusCircle size={16} color="#475569" />
-                            )}
-                            <span
+                        {DIAGRAM_META.map(({ type, label, description, svgKey, Icon }) => {
+                          const ready = Boolean(uml[svgKey]);
+                          return (
+                            <div
+                              key={type}
+                              onClick={() => { if (ready) { setUmlTab(type); setUmlOpen(true); } }}
                               style={{
-                                fontSize: 12,
-                                color: uml[key] ? "#8b5cf6" : "#64748b",
-                                fontWeight: 500,
+                                padding: "12px 14px",
+                                background: "#0f1419",
+                                borderRadius: 10,
+                                border: `1px solid ${ready ? "#8b5cf6" : "#2d3548"}`,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 12, cursor: ready ? "pointer" : "default",
+                                transition: "border-color 0.15s, background 0.15s",
                               }}
+                              onMouseEnter={(e) => { if (!ready) return; e.currentTarget.style.background = "#141929"; e.currentTarget.style.borderColor = "#a78bfa"; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = "#0f1419"; e.currentTarget.style.borderColor = ready ? "#8b5cf6" : "#2d3548"; }}
                             >
-                              {label}
-                            </span>
-                          </div>
-                        ))}
+                              <div
+                                style={{
+                                  width: 34,
+                                  height: 34,
+                                  borderRadius: 8,
+                                  flexShrink: 0,
+                                  background: ready ? "linear-gradient(135deg, rgba(139,92,246,0.25) 0%, rgba(99,102,241,0.25) 100%)" : "rgba(71,85,105,0.15)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  border: `1px solid ${ready ? "rgba(139,92,246,0.35)" : "rgba(71,85,105,0.3)"}`,
+                                }}
+                              >
+                                <Icon size={17} color={ready ? "#a78bfa" : "#475569"} />
+                              </div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div 
+                                  style={{
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    color: ready ? "#c4b5fd" : "#64748b",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis"
+                                  }}
+                                >
+                                  {label}
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: 10,
+                                    color: "#475569",
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  {description}
+                                </div>
+                              </div>
+                              <div style={{ flexShrink: 0 }}>
+                                {ready ? <CheckCircle2 size={16} color="#8b5cf6" /> : 
+                                <MinusCircle size={16} color="#334155" />}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
 
                       <button
-                        onClick={() => {
-                          if (!uml) return;
-                          const defaultTab: DiagramType =
-                            uml.class_svg ? "class" :
-                            uml.package_svg ? "package" :
-                            uml.sequence_svg ? "sequence" :
-                            uml.component_svg ? "component" : "activity";
-                          setUmlTab(defaultTab);
-                          setUmlOpen(true);
-                        }}
-                        style={{
-                          width: "100%",
+                        onClick={openViewer}
+                        style={{ width: "100%",
                           padding: "12px 20px",
                           borderRadius: 10,
                           border: "none",
@@ -531,7 +622,7 @@ export default function Securegenerator() {
                           gap: 8,
                         }}
                       >
-                        <Workflow size={16} />
+                        <Eye size={17} />
                         Open UML Viewer
                       </button>
                     </>
