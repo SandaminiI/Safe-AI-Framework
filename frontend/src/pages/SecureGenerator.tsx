@@ -2,7 +2,7 @@
 import { useState } from "react";
 import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
 import { 
-  FileSearch, CheckCircle2, MinusCircle, Workflow, Shield, Sparkles, 
+  CheckCircle2, MinusCircle, Workflow, Shield, Sparkles, 
   Copy, Check, Code2, ChevronDown, Zap, BarChart3, Clock, Settings, ArrowLeft 
 } from "lucide-react";
 
@@ -141,8 +141,6 @@ export default function Securegenerator() {
   };
 
   const fixSummary = out?.report?.fix_summary;
-  const semgrep = out?.report?.semgrep;
-  const llmFix = out?.report?.llm_fix;
   const uml = out?.report?.uml;
 
   return (
@@ -169,31 +167,22 @@ export default function Securegenerator() {
         }}
       >
         {/* Back Button */}
-        <button
-          onClick={() => window.history.back()}
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            border: "1px solid rgba(255, 255, 255, 0.2)",
-            background: "rgba(255, 255, 255, 0.05)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.15)";
-            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.3)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
-            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.2)";
-          }}
-        >
-          <ArrowLeft size={22} style={{ color: "#ffffff", stroke: "#ffffff" }} strokeWidth={2.5} />
-        </button>
+<button
+  onClick={() => window.history.back()}
+  style={{
+    width: 40,
+    height: 40,
+    background: "none",
+    border: "none",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    padding: 0,
+  }}
+>
+  <ArrowLeft size={22} color="#e2e8f0" strokeWidth={2.5} />
+</button>
 
         {/* Logo */}
         <div
