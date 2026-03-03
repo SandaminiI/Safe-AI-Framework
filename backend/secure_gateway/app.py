@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 import httpx
@@ -38,6 +39,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
         "http://localhost:5000",
         "http://127.0.0.1:5000",
         "http://localhost:3000",
@@ -406,8 +409,8 @@ async def security_middleware(request: Request, call_next):
     if path.startswith("/docs") or path.startswith("/openapi"):
         return await call_next(request)
 
-    # Allow station endpoints, onboard, auto-enroll, and metrics endpoints
-    if path.startswith("/station1/") or path.startswith("/station2/") or path.startswith("/onboard") or path.startswith("/auto-enroll") or path.startswith("/metrics"):
+    # Allow station endpoints, onboard, auto-enroll, metrics, and registry endpoints
+    if path.startswith("/station1/") or path.startswith("/station2/") or path.startswith("/onboard") or path.startswith("/auto-enroll") or path.startswith("/metrics") or path.startswith("/registry"):
         return await call_next(request)
 
     # Determine if authentication is needed
@@ -960,6 +963,65 @@ async def proxy_plugins_stop(request: Request, db: Session = Depends(get_db)):
         "policy_violation": False,
     })
     return resp
+
+
+# ============================================================================
+# REGISTRY ENDPOINT  (Public plugin listing for frontend)
+# ============================================================================
+
+def _human_time_ago(dt: Optional[datetime]) -> str:
+    """Convert a datetime to a human-readable '… ago' string."""
+    if dt is None:
+        return "never"
+    from datetime import timezone as _tz
+    now = datetime.now(_tz.utc)
+    # Ensure dt is offset-aware
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    delta = now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
+
+
+_STATUS_MAP = {
+    "active": "trusted",
+    "restricted": "restricted",
+    "blocked": "blocked",
+    "revoked": "blocked",
+}
+
+
+@app.get("/registry/plugins")
+async def registry_plugins(db: Session = Depends(get_db)):
+    """
+    Public listing of all registered plugins with safe fields only.
+    Returns frontend-compatible JSON (no secrets, tokens, or certs).
+    """
+    plugins = db.query(Plugin).all()
+    result = []
+    for p in plugins:
+        result.append({
+            "id": p.plugin_id,
+            "role": p.role or "Plugin",
+            "intent": p.declared_intent or "—",
+            "trustScore": round(p.trust_score, 1),
+            "status": _STATUS_MAP.get(p.status, "blocked"),
+            "anomalyFlag": p.anomaly_flag,
+            "lastActive": _human_time_ago(p.last_request_at),
+            "reqRate": f"{p.request_frequency} req/min",
+        })
+    return result
 
 
 # ============================================================================
