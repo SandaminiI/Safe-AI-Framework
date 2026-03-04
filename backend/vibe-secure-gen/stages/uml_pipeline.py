@@ -10,8 +10,8 @@ UML pipeline entry point used by pipeline.py.
 - Generates diagrams via rule-based (uml-gen-regex) and AI-based (uml-gen-ai)
 - Returns a unified report
 
-Diagram types: class, package, sequence, component, activity
-"""
+Diagram types: class, package, sequence, component, activity"""
+
 from __future__ import annotations
 
 import datetime
@@ -492,8 +492,8 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
     3. CIR generation   (one sub-step per language group)
     4. Rule-based UML generation  (uml-gen-regex + uml-renderer)
     5. AI-based UML generation    (uml-gen-ai + uml-renderer)
-    Final summary table
-    """
+    Final summary table"""
+
     pipeline_t0 = time.time()
     started_at  = datetime.datetime.now().strftime("%H:%M:%S")
 
@@ -623,17 +623,38 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                  total_duration),
             ], ok=all_ok)
 
+            # ── Build and return final result ──────────────────────────────────
             return {
                 "ok":            True,
                 "file_count":    total_files,
                 "error":         None,
-                # Backward-compatible top-level SVGs = rule-based results
+
+                # ── Rule-based SVGs (backward-compatible) ──────────────────
                 "class_svg":     uml_rule.get("class_svg"),
                 "package_svg":   uml_rule.get("package_svg"),
                 "sequence_svg":  uml_rule.get("sequence_svg"),
                 "component_svg": uml_rule.get("component_svg"),
                 "activity_svg":  uml_rule.get("activity_svg"),
+
+                # ── AI-generated SVGs
+                "ai_class_svg":     uml_ai.get("class_svg"),
+                "ai_package_svg":   uml_ai.get("package_svg"),
+                "ai_sequence_svg":  uml_ai.get("sequence_svg"),
+                "ai_component_svg": uml_ai.get("component_svg"),
+                "ai_activity_svg":  uml_ai.get("activity_svg"),
+
+                # ── PlantUML sources for both methods ──────────────────────
+                "ai_class_plantuml":     uml_ai.get("class_plantuml"),
+                "ai_package_plantuml":   uml_ai.get("package_plantuml"),
+                "ai_sequence_plantuml":  uml_ai.get("sequence_plantuml"),
+                "ai_component_plantuml": uml_ai.get("component_plantuml"),
+                "ai_activity_plantuml":  uml_ai.get("activity_plantuml"),
+
+                # ── Validation maps ────────────────────────────────────────
                 "validation":    uml_rule.get("validation", {}),
+                "ai_validation": uml_ai.get("validation", {}),
+
+                # ── Raw sub-results (for debugging / future use) ───────────
                 "rule_based":    uml_rule,
                 "ai":            uml_ai,
             }
@@ -659,12 +680,28 @@ def _error_result(msg: str, file_count: int = 0) -> Dict[str, Any]:
         "ok":            False,
         "file_count":    file_count,
         "error":         msg,
+
+        # Rule-based
         "class_svg":     None,
         "package_svg":   None,
         "sequence_svg":  None,
         "component_svg": None,
         "activity_svg":  None,
+
+        "ai_class_svg":     None,
+        "ai_package_svg":   None,
+        "ai_sequence_svg":  None,
+        "ai_component_svg": None,
+        "ai_activity_svg":  None,
+
+        "ai_class_plantuml":     None,
+        "ai_package_plantuml":   None,
+        "ai_sequence_plantuml":  None,
+        "ai_component_plantuml": None,
+        "ai_activity_plantuml":  None,
+
         "validation":    {},
+        "ai_validation": {},
         "rule_based":    {},
         "ai":            {},
     }

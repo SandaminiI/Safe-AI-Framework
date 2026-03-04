@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import SecureGenerator from "./pages/SecureGenerator";
 import CoreSystemUploader from "./pages/CoreSystemUploader"
 import PluginStudioPage from "./pages/PluginStudioPage";
+import PluginRegistryPage from "./pages/PluginRegistryPage";
 // If you already had a Home component, keep it. Here is a tiny placeholder:
 // function Home() {
 //   return (
@@ -21,7 +22,7 @@ export default function App() {
         <Route path="/CoreSystemUploader" element={<CoreSystemUploader />} />
         <Route path="/secure-generator" element={<SecureGenerator />} />
         <Route path="/PluginStudioPage" element={<PluginStudioPage />} />
-
+        <Route path="/PluginRegistryPage" element={<PluginRegistryPage />} />
       </Routes>
     </BrowserRouter>
   );

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import time
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 import httpx
@@ -17,22 +19,28 @@ from config import (
     STRICT_CORE_AUTH,
 )
 from database import engine, get_db, SessionLocal
-from models import Base, Plugin, RequestLog
+from models import Base, Plugin, RequestLog, TrustEvent
 from auth import save_root_ca_cert, load_root_ca_cert, verify_plugin_cert, issue_jwt, verify_jwt_token, verify_jwt_with_intent
-from trust_engine import update_plugin_trust
-from policy_engine import is_allowed
+from trust_engine import update_plugin_trust, evaluate_behavior, get_trust_status
+from policy_engine import is_allowed, evaluate as policy_evaluate, Decision
+from sqlalchemy import func as sa_func, Integer
 from fastapi.middleware.cors import CORSMiddleware
 from station1_cert_verification import station1
 from station2_access_control import station2
 import color_logger as clog
 
-app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="1.0")
+# Configure module-level logging so trust/policy engines output to console
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+app = FastAPI(title="Security Gateway (Auth + Policy + Trust + Proxy)", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
         "http://localhost:5000",
         "http://127.0.0.1:5000",
         "http://localhost:3000",
@@ -401,8 +409,8 @@ async def security_middleware(request: Request, call_next):
     if path.startswith("/docs") or path.startswith("/openapi"):
         return await call_next(request)
 
-    # Allow station endpoints, onboard, and auto-enroll endpoints
-    if path.startswith("/station1/") or path.startswith("/station2/") or path.startswith("/onboard") or path.startswith("/auto-enroll"):
+    # Allow station endpoints, onboard, auto-enroll, metrics, and registry endpoints
+    if path.startswith("/station1/") or path.startswith("/station2/") or path.startswith("/onboard") or path.startswith("/auto-enroll") or path.startswith("/metrics") or path.startswith("/registry"):
         return await call_next(request)
 
     # Determine if authentication is needed
@@ -453,6 +461,28 @@ async def security_middleware(request: Request, call_next):
             try:
                 payload = verify_jwt_with_intent(token)
                 
+                # ── Revoked-plugin gate ──────────────────────────────
+                plugin_id_early = payload.get("sub")
+                if plugin_id_early:
+                    _p = db.get(Plugin, plugin_id_early)
+                    if _p and _p.status == "revoked":
+                        evaluate_behavior(db, plugin_id_early, path, {
+                            "method": request.method, "status_code": 403,
+                            "latency_ms": 0, "error_flag": True,
+                            "cert_valid": True, "auth_failed": True,
+                            "policy_violation": True,
+                        })
+                        # Invalidate cached JWT
+                        _plugin_jwt_cache.pop(plugin_id_early, None)
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "Plugin has been revoked due to trust violations",
+                                "flow": "revoked",
+                                "message": "Trust score fell below revocation threshold. Full re-authentication via Station 1 required.",
+                            }
+                        )
+
                 # Validate access through Station 2
                 method = request.method
                 access_granted, context, error = station2.validate_jwt_and_check_access(
@@ -463,6 +493,15 @@ async def security_middleware(request: Request, call_next):
                 )
                 
                 if not access_granted:
+                    # Feed denial into trust engine
+                    _denied_pid = payload.get("sub")
+                    if _denied_pid:
+                        evaluate_behavior(db, _denied_pid, path, {
+                            "method": request.method, "status_code": 403,
+                            "latency_ms": 0, "error_flag": True,
+                            "cert_valid": True, "auth_failed": False,
+                            "policy_violation": True,
+                        })
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -482,6 +521,16 @@ async def security_middleware(request: Request, call_next):
                 clog.log_middleware_auth(plugin_id, "two-station")
                     
             except ValueError as e:
+                # Feed auth failure for the plugin if we can attribute it
+                _fail_pid = _safe_extract_plugin_from_jwt(token)
+                if _fail_pid:
+                    evaluate_behavior(db, _fail_pid, path, {
+                        "method": request.method, "status_code": 401,
+                        "latency_ms": 0, "error_flag": True,
+                        "cert_valid": False, "auth_failed": True,
+                        "policy_violation": False,
+                    })
+
                 # Try legacy JWT validation for backward compatibility
                 try:
                     plugin = _get_plugin_from_token(request, db)
@@ -490,9 +539,17 @@ async def security_middleware(request: Request, call_next):
                     
                     allowed, reason = is_allowed(plugin, path, request.method)
                     if not allowed:
+                        evaluate_behavior(db, plugin.plugin_id, path, {
+                            "method": request.method, "status_code": 403,
+                            "latency_ms": 0, "error_flag": True,
+                            "cert_valid": True, "auth_failed": False,
+                            "policy_violation": True,
+                        })
                         raise HTTPException(status_code=403, detail=reason)
                     
                     clog.log_middleware_legacy(plugin.plugin_id)
+                except HTTPException:
+                    raise
                 except:
                     raise HTTPException(
                         status_code=401,
@@ -534,11 +591,37 @@ async def security_middleware(request: Request, call_next):
                     )
                 )
                 db.commit()
-                update_plugin_trust(db, plugin.plugin_id)
+
+                # ── Zero-Trust: evaluate behaviour with full context ──
+                # Normal valid requests will NOT reduce trust.
+                # Only anomalies / violations trigger penalties.
+                evaluate_behavior(db, plugin.plugin_id, path, {
+                    "method": request.method,
+                    "status_code": status_code,
+                    "latency_ms": latency_ms,
+                    "error_flag": error_flag,
+                    "cert_valid": True,       # cert already verified at station 1
+                    "auth_failed": False,     # auth succeeded to reach here
+                    "policy_violation": False, # policy was not violated
+                })
             finally:
                 db.close()
 
     return response
+
+
+def _safe_extract_plugin_from_jwt(token: str) -> Optional[str]:
+    """
+    Best-effort extraction of plugin_id from a JWT that may be expired
+    or malformed.  Used to attribute auth failures to the correct plugin.
+    Returns None when attribution is impossible.
+    """
+    import jwt as pyjwt
+    try:
+        payload = pyjwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+        return payload.get("sub")
+    except Exception:
+        return None
 
 
 async def _proxy_request(request: Request, target_base: str, target_path: str) -> Response:
@@ -729,17 +812,27 @@ async def proxy_plugins_start(request: Request, db: Session = Depends(get_db)):
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/start")
     latency_ms = (time.perf_counter() - start) * 1000.0
 
+    error_flag = resp.status_code >= 400
     db.add(RequestLog(
         plugin_id=slug,
         path="/core/plugins/start",
         method="POST",
         status_code=resp.status_code,
         latency_ms=latency_ms,
-        error_flag=resp.status_code >= 400,
+        error_flag=error_flag,
     ))
     db.commit()
 
-    update_plugin_trust(db, slug)
+    # Zero-Trust: evaluate behaviour — normal requests will NOT reduce trust
+    evaluate_behavior(db, slug, "/core/plugins/start", {
+        "method": "POST",
+        "status_code": resp.status_code,
+        "latency_ms": latency_ms,
+        "error_flag": error_flag,
+        "cert_valid": True,
+        "auth_failed": False,
+        "policy_violation": False,
+    })
     return resp
 
 
@@ -754,10 +847,29 @@ async def proxy_plugins_run(request: Request, db: Session = Depends(get_db)):
 
     plugin = _ensure_plugin_row(db, slug)
 
-    # Enforce trust policy
-    if plugin.status == "blocked":
-        raise HTTPException(status_code=403, detail="Plugin blocked by trust policy")
-    
+    # ── Policy Engine: evaluate access before proxying ──────────────
+    policy_result = policy_evaluate(
+        plugin, "/core/plugins/run", "POST",
+        cert_valid=True,
+        anomaly_flag=plugin.anomaly_flag,
+    )
+    if policy_result.decision in (Decision.TEMPORARY_BLOCK, Decision.HARD_BLOCK):
+        # Record the policy violation in the trust engine
+        evaluate_behavior(db, slug, "/core/plugins/run", {
+            "method": "POST", "status_code": 403, "latency_ms": 0,
+            "error_flag": True, "cert_valid": True,
+            "auth_failed": False, "policy_violation": True,
+        })
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": policy_result.reason,
+                "decision": policy_result.decision.value,
+                "trust_score": policy_result.trust_score,
+                "risk_level": policy_result.risk_level.value,
+            }
+        )
+
     # ================================================================
     # ENFORCE TWO-STATION AUTHENTICATION FLOW
     # ================================================================
@@ -776,17 +888,27 @@ async def proxy_plugins_run(request: Request, db: Session = Depends(get_db)):
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/run")
     latency_ms = (time.perf_counter() - start) * 1000.0
 
+    error_flag = resp.status_code >= 400
     db.add(RequestLog(
         plugin_id=slug,
         path="/core/plugins/run",
         method="POST",
         status_code=resp.status_code,
         latency_ms=latency_ms,
-        error_flag=resp.status_code >= 400,
+        error_flag=error_flag,
     ))
     db.commit()
 
-    update_plugin_trust(db, slug)
+    # Zero-Trust: evaluate behaviour — normal requests will NOT reduce trust
+    evaluate_behavior(db, slug, "/core/plugins/run", {
+        "method": "POST",
+        "status_code": resp.status_code,
+        "latency_ms": latency_ms,
+        "error_flag": error_flag,
+        "cert_valid": True,
+        "auth_failed": False,
+        "policy_violation": False,
+    })
     return resp
 
 
@@ -819,18 +941,227 @@ async def proxy_plugins_stop(request: Request, db: Session = Depends(get_db)):
     resp = await _proxy_request(request, CORE_SYSTEM_URL, "/core/plugins/stop")
     latency_ms = (time.perf_counter() - start) * 1000.0
 
+    error_flag = resp.status_code >= 400
     db.add(RequestLog(
         plugin_id=slug,
         path="/core/plugins/stop",
         method="POST",
         status_code=resp.status_code,
         latency_ms=latency_ms,
-        error_flag=resp.status_code >= 400,
+        error_flag=error_flag,
     ))
     db.commit()
 
-    update_plugin_trust(db, slug)
+    # Zero-Trust: evaluate behaviour — normal requests will NOT reduce trust
+    evaluate_behavior(db, slug, "/core/plugins/stop", {
+        "method": "POST",
+        "status_code": resp.status_code,
+        "latency_ms": latency_ms,
+        "error_flag": error_flag,
+        "cert_valid": True,
+        "auth_failed": False,
+        "policy_violation": False,
+    })
     return resp
+
+
+# ============================================================================
+# REGISTRY ENDPOINT  (Public plugin listing for frontend)
+# ============================================================================
+
+def _human_time_ago(dt: Optional[datetime]) -> str:
+    """Convert a datetime to a human-readable '… ago' string."""
+    if dt is None:
+        return "never"
+    from datetime import timezone as _tz
+    now = datetime.now(_tz.utc)
+    # Ensure dt is offset-aware
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    delta = now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
+
+
+_STATUS_MAP = {
+    "active": "trusted",
+    "restricted": "restricted",
+    "blocked": "blocked",
+    "revoked": "blocked",
+}
+
+
+@app.get("/registry/plugins")
+async def registry_plugins(db: Session = Depends(get_db)):
+    """
+    Public listing of all registered plugins with safe fields only.
+    Returns frontend-compatible JSON (no secrets, tokens, or certs).
+    """
+    plugins = db.query(Plugin).all()
+    result = []
+    for p in plugins:
+        result.append({
+            "id": p.plugin_id,
+            "role": p.role or "Plugin",
+            "intent": p.declared_intent or "—",
+            "trustScore": round(p.trust_score, 1),
+            "status": _STATUS_MAP.get(p.status, "blocked"),
+            "anomalyFlag": p.anomaly_flag,
+            "lastActive": _human_time_ago(p.last_request_at),
+            "reqRate": f"{p.request_frequency} req/min",
+        })
+    return result
+
+
+# ============================================================================
+# METRICS ENDPOINTS  (Zero-Trust Observability)
+# ============================================================================
+
+@app.get("/metrics/trust")
+async def metrics_trust(db: Session = Depends(get_db)):
+    """
+    Aggregate trust-score statistics across all registered plugins.
+
+    Returns counts per status tier (active / restricted / blocked / revoked),
+    the overall average trust score, and a per-plugin breakdown.
+    """
+    plugins = db.query(Plugin).all()
+    total = len(plugins)
+
+    active = sum(1 for p in plugins if p.status == "active")
+    restricted = sum(1 for p in plugins if p.status == "restricted")
+    blocked = sum(1 for p in plugins if p.status == "blocked")
+    revoked = sum(1 for p in plugins if p.status == "revoked")
+    avg_trust = round(sum(p.trust_score for p in plugins) / total, 2) if total else 0.0
+
+    breakdown = [
+        {
+            "plugin_id": p.plugin_id,
+            "trust_score": round(p.trust_score, 2),
+            "status": p.status,
+            "anomaly_flag": p.anomaly_flag,
+        }
+        for p in plugins
+    ]
+
+    return {
+        "total_plugins": total,
+        "average_trust_score": avg_trust,
+        "active_count": active,
+        "restricted_count": restricted,
+        "blocked_count": blocked,
+        "revoked_count": revoked,
+        "plugins": breakdown,
+    }
+
+
+@app.get("/metrics/anomalies")
+async def metrics_anomalies(db: Session = Depends(get_db)):
+    """
+    Anomaly and trust-event summary for observability dashboards.
+    """
+    anomaly_flagged = db.query(sa_func.count()).select_from(Plugin).filter(
+        Plugin.anomaly_flag == True  # noqa: E712
+    ).scalar() or 0
+
+    total_trust_events = db.query(sa_func.count()).select_from(TrustEvent).scalar() or 0
+
+    penalty_events = db.query(sa_func.count()).select_from(TrustEvent).filter(
+        TrustEvent.event_type == "penalty"
+    ).scalar() or 0
+
+    recovery_events = db.query(sa_func.count()).select_from(TrustEvent).filter(
+        TrustEvent.event_type == "recovery"
+    ).scalar() or 0
+
+    # Recent penalties (last 100)
+    recent = (
+        db.query(TrustEvent)
+        .filter(TrustEvent.event_type == "penalty")
+        .order_by(TrustEvent.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    recent_list = [
+        {
+            "plugin_id": e.plugin_id,
+            "delta": e.delta,
+            "score_before": round(e.score_before, 2),
+            "score_after": round(e.score_after, 2),
+            "detail": e.detail,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in recent
+    ]
+
+    return {
+        "anomaly_flagged_plugins": anomaly_flagged,
+        "total_trust_events": total_trust_events,
+        "penalty_events": penalty_events,
+        "recovery_events": recovery_events,
+        "recent_penalties": recent_list,
+    }
+
+
+@app.get("/metrics/performance")
+async def metrics_performance(db: Session = Depends(get_db)):
+    """
+    Request-level performance metrics from the request_logs table.
+    """
+    total_requests = db.query(sa_func.count()).select_from(RequestLog).scalar() or 0
+
+    avg_latency = db.query(sa_func.avg(RequestLog.latency_ms)).scalar()
+    avg_latency = round(avg_latency, 2) if avg_latency else 0.0
+
+    error_count = db.query(sa_func.count()).select_from(RequestLog).filter(
+        RequestLog.error_flag == True  # noqa: E712
+    ).scalar() or 0
+
+    error_rate = round(error_count / total_requests * 100, 2) if total_requests else 0.0
+
+    # Per-path breakdown (top 20 by request count)
+    path_stats = (
+        db.query(
+            RequestLog.path,
+            sa_func.count().label("count"),
+            sa_func.avg(RequestLog.latency_ms).label("avg_latency"),
+            sa_func.sum(
+                sa_func.cast(RequestLog.error_flag, Integer)
+            ).label("errors"),
+        )
+        .group_by(RequestLog.path)
+        .order_by(sa_func.count().desc())
+        .limit(20)
+        .all()
+    )
+    per_path = [
+        {
+            "path": row.path,
+            "request_count": row.count,
+            "avg_latency_ms": round(row.avg_latency, 2) if row.avg_latency else 0.0,
+            "error_count": int(row.errors or 0),
+        }
+        for row in path_stats
+    ]
+
+    return {
+        "total_requests": total_requests,
+        "average_latency_ms": avg_latency,
+        "error_count": error_count,
+        "error_rate_percent": error_rate,
+        "per_path": per_path,
+    }
 
 
 @app.api_route("/core/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
