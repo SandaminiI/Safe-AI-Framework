@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import requests
 
-from plugin_manager import start_plugin_container, stop_plugin_container, get_plugin_host_port
+from plugin_manager import start_plugin_container, stop_plugin_container, get_plugin_host_port, PLUGINS_ROOT
+from interface_enforcer import enforce_interface
 
 router = APIRouter()
 
@@ -14,6 +15,13 @@ class StartPayload(BaseModel):
 
 @router.post("/start")
 def start_plugin(body: StartPayload):
+    # --- Interface Enforcement ---
+    plugin_path = PLUGINS_ROOT / body.slug
+    try:
+        enforce_interface(plugin_path)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=f"Interface validation failed: {ve}")
+
     try:
         c = start_plugin_container(
             slug=body.slug,
@@ -42,6 +50,13 @@ class RunPayload(BaseModel):
 
 @router.post("/run")
 def run_plugin(body: RunPayload):
+    # --- Interface Enforcement ---
+    plugin_path = PLUGINS_ROOT / body.slug
+    try:
+        enforce_interface(plugin_path)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=f"Interface validation failed: {ve}")
+
     try:
         c = start_plugin_container(
             slug=body.slug,
