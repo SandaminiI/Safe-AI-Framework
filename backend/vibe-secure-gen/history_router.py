@@ -35,6 +35,17 @@ class FixSummary(BaseModel):
     remaining_issues: Optional[int]   = None
     fix_rate_percent: Optional[float] = None
 
+class UmlDiagramStore(BaseModel):
+    class_svg:              Optional[str] = None
+    package_svg:            Optional[str] = None
+    sequence_svg:           Optional[str] = None
+    component_svg:          Optional[str] = None
+    activity_svg:           Optional[str] = None
+    ai_class_svg:           Optional[str] = None
+    ai_package_svg:         Optional[str] = None
+    ai_sequence_svg:        Optional[str] = None
+    ai_component_svg:       Optional[str] = None
+    ai_activity_svg:        Optional[str] = None
 
 class HistoryEntry(BaseModel):
     id:            str
@@ -45,7 +56,7 @@ class HistoryEntry(BaseModel):
     fix_summary:   Optional[FixSummary] = None
     languages:     Optional[List[str]]  = None
     decision:      Optional[str]        = None
-
+    uml:           Optional[UmlDiagramStore] = None
 
 def _load() -> List[Dict[str, Any]]:
     if not HISTORY_FILE.exists():

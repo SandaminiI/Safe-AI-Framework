@@ -147,6 +147,8 @@ function generateId() {
 }
 
 async function saveToHistory(prompt: string, result: ApiResult): Promise<void> {
+  const umlData = result.report?.uml;
+
   const entry: HistoryEntry = {
     id:            generateId(),
     timestamp:     new Date().toISOString(),
@@ -156,6 +158,18 @@ async function saveToHistory(prompt: string, result: ApiResult): Promise<void> {
     fix_summary:   result.report?.fix_summary,
     languages:     result.report?.semgrep?.languages,
     decision:      result.decision,
+     uml: umlData ? {                           // ← NEW
+      class_svg:             umlData.class_svg,
+      package_svg:           umlData.package_svg,
+      sequence_svg:          umlData.sequence_svg,
+      component_svg:         umlData.component_svg,
+      activity_svg:          umlData.activity_svg,
+      ai_class_svg:          umlData.ai_class_svg,
+      ai_package_svg:        umlData.ai_package_svg,
+      ai_sequence_svg:       umlData.ai_sequence_svg,
+      ai_component_svg:      umlData.ai_component_svg,
+      ai_activity_svg:       umlData.ai_activity_svg,
+    } : undefined,
   };
   try {
     await fetch(HISTORY_API, {
@@ -228,6 +242,23 @@ export default function Securegenerator() {
   /*  restore a history entry into the UI */
   const onRestoreHistory = (entry: HistoryEntry) => {
     setPrompt(entry.prompt);
+    const restoredUml: UmlReport | undefined = entry.uml ? {
+    class_svg:             entry.uml.class_svg,
+    package_svg:           entry.uml.package_svg,
+    sequence_svg:          entry.uml.sequence_svg,
+    component_svg:         entry.uml.component_svg,
+    activity_svg:          entry.uml.activity_svg,
+    ai_class_svg:          entry.uml.ai_class_svg,
+    ai_package_svg:        entry.uml.ai_package_svg,
+    ai_sequence_svg:       entry.uml.ai_sequence_svg,
+    ai_component_svg:      entry.uml.ai_component_svg,
+    ai_activity_svg:       entry.uml.ai_activity_svg,
+  } : undefined;
+
+  const restoredAiCache = restoredUml
+    ? buildAiCacheFromReport(restoredUml)
+    : {};
+
     setOut({
       code:          entry.code,
       original_code: entry.original_code,
@@ -235,12 +266,13 @@ export default function Securegenerator() {
       report: {
         fix_summary: entry.fix_summary,
         semgrep:     { languages: entry.languages },
+        uml:         restoredUml,
       } as Report,
     });
+    setAiUmlCache(restoredAiCache); 
     setShowOriginal(false);
     setCopied(false);
     setUmlOpen(false);
-    setAiUmlCache({});
   };
 
   const copyCode = async () => {
