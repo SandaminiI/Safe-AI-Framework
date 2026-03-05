@@ -107,7 +107,7 @@ async def run_pipeline(prompt: str) -> Dict[str, Any]:
     if not original_code:
         original_code = "// empty"
     
-    print(f"   ✅ Generated {len(original_code)} characters")
+    print(f"   Generated {len(original_code)} characters")
     
     # ===== STAGE 3: SEMGREP ANALYSIS + AUTOFIX =====
     print("\n🔍 Stage 3: Security analysis (Semgrep)...")
@@ -115,7 +115,7 @@ async def run_pipeline(prompt: str) -> Dict[str, Any]:
     
     if not semgrep_result.get("ok"):
         # Semgrep failed - return original code with error
-        print(f"   ❌ Semgrep failed: {semgrep_result.get('error')}")
+        print(f"   Semgrep failed: {semgrep_result.get('error')}")
         return {
             "code": original_code,
             "original_code": original_code,
@@ -154,9 +154,9 @@ async def run_pipeline(prompt: str) -> Dict[str, Any]:
             
             if llm_fix_result.get("fixed"):
                 current_code = llm_fix_result["code"]
-                print(f"   ✅ LLM fixed {llm_fix_result['fixes_applied']} additional issues")
+                print(f"   LLM fixed {llm_fix_result['fixes_applied']} additional issues")
             else:
-                print(f"   ⚠️  LLM fix unsuccessful: {llm_fix_result.get('error', 'Unknown')}")
+                print(f"   LLM fix unsuccessful: {llm_fix_result.get('error', 'Unknown')}")
         
         elif len(issues_to_fix) > 10:
             print(f"\n⚠️  Stage 4: {len(remaining_issues)} issues remain (too many for LLM autofix)")
@@ -167,7 +167,7 @@ async def run_pipeline(prompt: str) -> Dict[str, Any]:
                 "reason": f"Too many issues ({len(remaining_issues)}) - manual review recommended"
             }
     else:
-        print(f"\n✅ Stage 4: No remaining issues - LLM fix not needed")
+        print(f"\n📝 Stage 4: No remaining issues - LLM fix not needed")
     
     # ===== STAGE 5: UML GENERATION =====
     print("\n📊 Stage 5: Generating UML diagrams...")
@@ -184,7 +184,7 @@ async def run_pipeline(prompt: str) -> Dict[str, Any]:
         final_issues = llm_fix_result.get("issues_after", final_issues)
     
     print("\n" + "=" * 80)
-    print("✅ PIPELINE COMPLETE")
+    print(" PIPELINE COMPLETE")
     print("=" * 80)
     print(f"📈 Results:")
     print(f"   • Initial vulnerabilities: {initial_issues}")
