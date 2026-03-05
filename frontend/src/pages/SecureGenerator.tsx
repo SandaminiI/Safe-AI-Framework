@@ -102,7 +102,7 @@ type ApiResult = {
 
 /*  API endpoints  */
 const API         = "http://localhost:8000/api/generate";
-const HISTORY_API = "http://localhost:8000/api/history/save";   // ← NEW
+const HISTORY_API = "http://localhost:8000/api/history/save";
 const UML_AI_API  = "http://localhost:7081/uml/ai";
 
 /*  Diagram metadata */
@@ -158,7 +158,7 @@ async function saveToHistory(prompt: string, result: ApiResult): Promise<void> {
     fix_summary:   result.report?.fix_summary,
     languages:     result.report?.semgrep?.languages,
     decision:      result.decision,
-     uml: umlData ? {                           // ← NEW
+     uml: umlData ? {
       class_svg:             umlData.class_svg,
       package_svg:           umlData.package_svg,
       sequence_svg:          umlData.sequence_svg,
@@ -298,23 +298,23 @@ export default function Securegenerator() {
 
   /*  RENDER  */
   return (
-    <div style={{ display: "flex", width: "100vw", height: "100vh", background: "#0f172a", overflow: "hidden" }}>
+    <div style={{ display: "flex", width: "100vw", height: "100vh", background: "#0a0a14", overflow: "hidden" }}>
 
       {/*  Sidebar */}
       <div style={{
-        width: 60, background: "#1e1b2e", display: "flex", flexDirection: "column",
-        alignItems: "center", padding: "20px 0", gap: 20, borderRight: "1px solid #2d2a3d",
+        width: 60, background: "#12101e", display: "flex", flexDirection: "column",
+        alignItems: "center", padding: "20px 0", gap: 20, borderRight: "1px solid #2a2640",
       }}>
         {/* Back */}
         <button
           onClick={() => window.history.back()}
           style={{ width: 40, height: 40, background: "none", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}
         >
-          <ArrowLeft size={22} color="#e2e8f0" strokeWidth={2.5} />
+          <ArrowLeft size={22} color="#c4b5fd" strokeWidth={2.5} />
         </button>
 
         {/* Logo */}
-        <div style={{ width: 40, height: 40, borderRadius: 12, background: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ width: 40, height: 40, borderRadius: 12, background: "linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Zap size={24} color="#fff" />
         </div>
 
@@ -322,35 +322,35 @@ export default function Securegenerator() {
         <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 20 }}>
 
           {/* Shield — active */}
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: "#8b5cf6", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
             <Shield size={20} color="#fff" />
           </div>
 
-          {/* CHANGED: Clock now opens the history panel */}
+          {/* Clock — opens history panel */}
           <button
             onClick={() => setHistoryOpen(true)}
             title="View generation history"
             style={{
               width: 40, height: 40, borderRadius: 10, padding: 0,
-              background: historyOpen ? "rgba(139,92,246,0.15)" : "transparent",
-              border:     historyOpen ? "1px solid #8b5cf6"       : "1px solid transparent",
+              background: historyOpen ? "rgba(124,58,237,0.2)" : "transparent",
+              border:     historyOpen ? "1px solid #7c3aed"     : "1px solid transparent",
               display: "flex", alignItems: "center", justifyContent: "center",
               cursor: "pointer", transition: "background .2s, border-color .2s",
             }}
           >
-            <Clock size={20} color={historyOpen ? "#8b5cf6" : "#94a3b8"} />
+            <Clock size={20} color={historyOpen ? "#a78bfa" : "#6b6a8a"} />
           </button>
 
           {/* BarChart — placeholder */}
           <div style={{ width: 40, height: 40, borderRadius: 10, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: 0.5 }}>
-            <BarChart3 size={20} color="#94a3b8" />
+            <BarChart3 size={20} color="#6b6a8a" />
           </div>
         </div>
 
         {/* Settings */}
         <div style={{ marginTop: "auto" }}>
           <div style={{ width: 40, height: 40, borderRadius: 10, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: 0.5 }}>
-            <Settings size={20} color="#94a3b8" />
+            <Settings size={20} color="#6b6a8a" />
           </div>
         </div>
       </div>
@@ -359,12 +359,12 @@ export default function Securegenerator() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Header */}
-        <div style={{ padding: "20px 32px", borderBottom: "1px solid #1e293b", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ padding: "20px 32px", borderBottom: "1px solid #1e1a30", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#f1f5f9" }}>
+            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#ede9fe" }}>
               Secure Code Generator
             </h1>
-            <p style={{ margin: "4px 0 0", fontSize: 12, color: "#64748b" }}>
+            <p style={{ margin: "4px 0 0", fontSize: 12, color: "#6b6a8a" }}>
               AI-powered code generation with security analysis &amp; UML visualization
             </p>
           </div>
@@ -378,18 +378,18 @@ export default function Securegenerator() {
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
 
               {/* Input card */}
-              <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                <label style={{ display: "block", marginBottom: 12, fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+              <div style={{ background: "#12101e", borderRadius: 16, padding: 24, border: "1px solid #2a2640" }}>
+                <label style={{ display: "block", marginBottom: 12, fontSize: 11, fontWeight: 600, color: "#6b6a8a", textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   Describe the code you want to generate
                 </label>
                 <textarea
                   rows={6}
-                  style={{ width: "100%", padding: 16, borderRadius: 12, border: "1px solid #2d3548", fontSize: 13, fontFamily: "inherit", resize: "vertical", outline: "none", boxSizing: "border-box", background: "#0f1419", color: "#94a3b8", transition: "border-color 0.2s", lineHeight: 1.6 }}
+                  style={{ width: "100%", padding: 16, borderRadius: 12, border: "1px solid #2a2640", fontSize: 13, fontFamily: "inherit", resize: "vertical", outline: "none", boxSizing: "border-box", background: "#0a0a14", color: "#c4b5fd", transition: "border-color 0.2s", lineHeight: 1.6 }}
                   placeholder="e.g., give javascript code for student management system..."
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                  onBlur={(e)  => (e.target.style.borderColor = "#2d3548")}
+                  onFocus={(e) => (e.target.style.borderColor = "#7c3aed")}
+                  onBlur={(e)  => (e.target.style.borderColor = "#2a2640")}
                 />
 
                 <div style={{ marginTop: 20, display: "flex", gap: 12 }}>
@@ -398,7 +398,7 @@ export default function Securegenerator() {
                     disabled={loading || !prompt.trim()}
                     style={{
                       flex: 1, padding: "14px 24px", borderRadius: 10, border: "none",
-                      background: loading || !prompt.trim() ? "#2d3548" : "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)",
+                      background: loading || !prompt.trim() ? "#1e1a30" : "linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)",
                       color: "white", fontSize: 14, fontWeight: 600,
                       cursor: loading || !prompt.trim() ? "not-allowed" : "pointer",
                       display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "transform 0.2s",
@@ -411,7 +411,7 @@ export default function Securegenerator() {
                   {out?.code && (
                     <button
                       onClick={copyCode}
-                      style={{ padding: "14px 20px", borderRadius: 10, border: "1px solid #2d3548", background: copied ? "#8b5cf6" : "transparent", color: copied ? "#fff" : "#94a3b8", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                      style={{ padding: "14px 20px", borderRadius: 10, border: "1px solid #2a2640", background: copied ? "#7c3aed" : "transparent", color: copied ? "#fff" : "#6b6a8a", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
                     >
                       {copied ? <Check size={18} /> : <Copy size={18} />}
                     </button>
@@ -421,14 +421,14 @@ export default function Securegenerator() {
 
               {/* UML diagrams */}
               {out && (
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-                    <Network size={14} color="#8b5cf6" />
+                <div style={{ background: "#12101e", borderRadius: 16, padding: 24, border: "1px solid #2a2640" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6a8a", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Network size={14} color="#7c3aed" />
                     UML Diagrams
                   </div>
 
                   {!uml || uml.error ? (
-                    <div style={{ padding: 16, background: "#0f1419", borderRadius: 8, border: "1px solid #2d3548", color: "#64748b", fontSize: 13, textAlign: "center" }}>
+                    <div style={{ padding: 16, background: "#0a0a14", borderRadius: 8, border: "1px solid #2a2640", color: "#6b6a8a", fontSize: 13, textAlign: "center" }}>
                       {uml?.error ? `UML generation: ${uml.error}` : "No UML diagrams available for this generation (e.g. non-Java code)."}
                     </div>
                   ) : (
@@ -439,19 +439,19 @@ export default function Securegenerator() {
                           return (
                             <div
                               key={type}
-                              style={{ padding: "12px 14px", background: "#0f1419", borderRadius: 10, border: `1px solid ${ready ? "#8b5cf6" : "#2d3548"}`, display: "flex", alignItems: "center", gap: 12, cursor: "default" }}
+                              style={{ padding: "12px 14px", background: "#0a0a14", borderRadius: 10, border: `1px solid ${ready ? "#7c3aed" : "#2a2640"}`, display: "flex", alignItems: "center", gap: 12, cursor: "default" }}
                             >
-                              <div style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: ready ? "linear-gradient(135deg, rgba(139,92,246,0.25) 0%, rgba(99,102,241,0.25) 100%)" : "rgba(71,85,105,0.15)", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${ready ? "rgba(139,92,246,0.35)" : "rgba(71,85,105,0.3)"}` }}>
-                                <Icon size={17} color={ready ? "#a78bfa" : "#475569"} />
+                              <div style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: ready ? "linear-gradient(135deg, rgba(124,58,237,0.25) 0%, rgba(91,33,182,0.25) 100%)" : "rgba(42,38,64,0.4)", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${ready ? "rgba(124,58,237,0.4)" : "rgba(42,38,64,0.6)"}` }}>
+                                <Icon size={17} color={ready ? "#a78bfa" : "#4a4870"} />
                               </div>
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: 12, fontWeight: 600, color: ready ? "#c4b5fd" : "#64748b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: ready ? "#c4b5fd" : "#4a4870", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                   {label}
                                 </div>
-                                <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>{description}</div>
+                                <div style={{ fontSize: 10, color: "#4a4870", marginTop: 2 }}>{description}</div>
                               </div>
                               <div style={{ flexShrink: 0 }}>
-                                {ready ? <CheckCircle2 size={16} color="#8b5cf6" /> : <MinusCircle size={16} color="#334155" />}
+                                {ready ? <CheckCircle2 size={16} color="#7c3aed" /> : <MinusCircle size={16} color="#2a2640" />}
                               </div>
                             </div>
                           );
@@ -460,7 +460,7 @@ export default function Securegenerator() {
 
                       <button
                         onClick={openViewer}
-                        style={{ width: "100%", padding: "12px 20px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)", color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                        style={{ width: "100%", padding: "12px 20px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)", color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
                       >
                         <Eye size={17} />
                         Open UML Viewer
@@ -472,9 +472,9 @@ export default function Securegenerator() {
 
               {/* Auto-fix results */}
               {out && fixSummary && fixSummary.initial_issues! > 0 && (
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-                    <Shield size={14} color="#8b5cf6" />
+                <div style={{ background: "#12101e", borderRadius: 16, padding: 24, border: "1px solid #2a2640" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6a8a", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Shield size={14} color="#7c3aed" />
                     Auto-Fix Results
                   </div>
 
@@ -485,8 +485,8 @@ export default function Securegenerator() {
                       { label: "LLM Fixed",      val: fixSummary.llm_fixed || 0,  color: "#3b82f6" },
                       { label: "Remaining",      val: fixSummary.remaining_issues, color: fixSummary.remaining_issues === 0 ? "#10b981" : "#f59e0b" },
                     ].map(({ label, val, color }) => (
-                      <div key={label} style={{ padding: 16, background: "#0f1419", borderRadius: 12, border: "1px solid #2d3548" }}>
-                        <div style={{ fontSize: 10, color: "#64748b", marginBottom: 8, textTransform: "uppercase", fontWeight: 600, letterSpacing: "0.05em" }}>{label}</div>
+                      <div key={label} style={{ padding: 16, background: "#0a0a14", borderRadius: 12, border: "1px solid #2a2640" }}>
+                        <div style={{ fontSize: 10, color: "#6b6a8a", marginBottom: 8, textTransform: "uppercase", fontWeight: 600, letterSpacing: "0.05em" }}>{label}</div>
                         <div style={{ fontSize: 28, fontWeight: 700, color }}>{val}</div>
                       </div>
                     ))}
@@ -494,14 +494,14 @@ export default function Securegenerator() {
 
                   <div style={{ marginBottom: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12 }}>
-                      <span style={{ color: "#64748b" }}>
+                      <span style={{ color: "#6b6a8a" }}>
                         Progress: Fixed {fixSummary.semgrep_fixed! + fixSummary.llm_fixed!}/{fixSummary.initial_issues}
                       </span>
                       <span style={{ color: "#10b981", fontWeight: 700 }}>
                         {fixSummary.fix_rate_percent?.toFixed(0)}%
                       </span>
                     </div>
-                    <div style={{ width: "100%", height: 8, background: "#0f1419", borderRadius: 999, overflow: "hidden" }}>
+                    <div style={{ width: "100%", height: 8, background: "#0a0a14", borderRadius: 999, overflow: "hidden" }}>
                       <div style={{ width: `${fixSummary.fix_rate_percent}%`, height: "100%", background: "#10b981", transition: "width 0.5s ease", borderRadius: 999 }} />
                     </div>
                   </div>
@@ -521,50 +521,50 @@ export default function Securegenerator() {
               <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
 
                 {/* Generated Code */}
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
+                <div style={{ background: "#12101e", borderRadius: 16, padding: 24, border: "1px solid #2a2640" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
-                      <Code2 size={14} color="#8b5cf6" />
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6a8a", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
+                      <Code2 size={14} color="#7c3aed" />
                       Generated Code
                     </div>
                     {out.original_code && out.original_code !== out.code && (
                       <button
                         onClick={() => setShowOriginal(!showOriginal)}
-                        style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #8b5cf6", background: showOriginal ? "#8b5cf6" : "transparent", color: showOriginal ? "#fff" : "#8b5cf6", fontSize: 11, fontWeight: 600, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.05em" }}
+                        style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #7c3aed", background: showOriginal ? "#7c3aed" : "transparent", color: showOriginal ? "#fff" : "#a78bfa", fontSize: 11, fontWeight: 600, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.05em" }}
                       >
                         {showOriginal ? "Show Fixed" : "Show Original"}
                       </button>
                     )}
                   </div>
-                  <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 12, lineHeight: 1.7, background: "#0a0f1a", color: "#e2e8f0", padding: 20, borderRadius: 10, overflow: "auto", maxHeight: 500, fontFamily: "'Fira Code', 'Cascadia Code', monospace" }}>
+                  <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 12, lineHeight: 1.7, background: "#07060f", color: "#ede9fe", padding: 20, borderRadius: 10, overflow: "auto", maxHeight: 500, fontFamily: "'Fira Code', 'Cascadia Code', monospace" }}>
                     {showOriginal ? out.original_code : out.code}
                   </pre>
                 </div>
 
                 {/* Security Report */}
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
+                <div style={{ background: "#12101e", borderRadius: 16, padding: 24, border: "1px solid #2a2640" }}>
                   <div
                     style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
                     onClick={() => setSecurityReportOpen(!securityReportOpen)}
                   >
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
-                      <Shield size={14} color="#a855f7" />
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#6b6a8a", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
+                      <Shield size={14} color="#9333ea" />
                       Security Report
                     </div>
-                    <ChevronDown size={16} color="#64748b" style={{ transform: securityReportOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }} />
+                    <ChevronDown size={16} color="#6b6a8a" style={{ transform: securityReportOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }} />
                   </div>
 
-                  <div style={{ marginTop: 12, fontSize: 11, color: "#64748b" }}>
+                  <div style={{ marginTop: 12, fontSize: 11, color: "#6b6a8a" }}>
                     Policy: {out.report.policy_version ?? "LLM01-2025-v1"}
                   </div>
 
                   {securityReportOpen && (
                     <>
-                      <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#8b5cf6", fontWeight: 500, cursor: "pointer" }}>
+                      <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#a78bfa", fontWeight: 500, cursor: "pointer" }}>
                         <Code2 size={14} />
                         View Enhanced Prompt
                       </div>
-                      <pre style={{ whiteSpace: "pre-wrap", margin: "12px 0 0 0", fontSize: 11, background: "#0a0f1a", color: "#64748b", padding: 16, borderRadius: 8, maxHeight: 300, overflow: "auto", fontFamily: "monospace", lineHeight: 1.6 }}>
+                      <pre style={{ whiteSpace: "pre-wrap", margin: "12px 0 0 0", fontSize: 11, background: "#07060f", color: "#6b6a8a", padding: 16, borderRadius: 8, maxHeight: 300, overflow: "auto", fontFamily: "monospace", lineHeight: 1.6 }}>
                         {out.report.prompt_after_enhancement}
                       </pre>
                     </>
@@ -592,7 +592,7 @@ export default function Securegenerator() {
         />
       )}
 
-      {/* NEW: History Panel — renders on top of everything when open */}
+      {/* History Panel */}
       <ChatHistoryPanel
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
