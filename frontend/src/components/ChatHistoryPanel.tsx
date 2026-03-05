@@ -22,6 +22,18 @@ export type HistoryEntry = {
   };
   languages?: string[];
   decision?:  string;
+  uml?: {                          // ← NEW
+    class_svg?:             string | null;
+    package_svg?:           string | null;
+    sequence_svg?:          string | null;
+    component_svg?:         string | null;
+    activity_svg?:          string | null;
+    ai_class_svg?:          string | null;
+    ai_package_svg?:        string | null;
+    ai_sequence_svg?:       string | null;
+    ai_component_svg?:      string | null;
+    ai_activity_svg?:       string | null;
+  };
 };
 
 type Props = {
@@ -68,6 +80,7 @@ export default function ChatHistoryPanel({ open, onClose, onRestore }: Props) {
   const [deleting, setDeleting] = useState<string | null>(null);
 
   /* load whenever the panel opens */
+  // eslint-disable-next-line react-hooks/immutability
   useEffect(() => { if (open) fetchHistory(); }, [open]);
 
   async function fetchHistory() {
