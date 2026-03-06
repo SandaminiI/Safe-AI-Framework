@@ -109,7 +109,7 @@ def validate_entry_function(plugin_path: str | Path) -> None:
 
     for pattern in _ENTRY_PATTERNS:
         if pattern.search(source):
-            return  # ✅ found a valid run export
+            return  # found a valid run export
 
     raise ValueError(
         "entry.js does not export the required function: "
