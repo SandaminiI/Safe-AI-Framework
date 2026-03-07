@@ -857,7 +857,7 @@ async function onStopPlugin(name?: string) {
         <div style={cardStyle}>
           <button
             onClick={() => setShowPluginModal(true)}
-            disabled={!folderFiles || busy}
+            disabled={!status?.project_present || busy}
             style={{
               marginTop: 14,
               width: "100%",
@@ -941,6 +941,16 @@ async function onStopPlugin(name?: string) {
         </div>
       </div>
     </div>
+
+    {/* Plugin Studio Modal */}
+    <Modal
+      open={showPluginModal}
+      title="Add AI Plugin"
+      onClose={() => setShowPluginModal(false)}
+      width={900}
+    >
+      <PluginStudioPage apiBase={API} compact />
+    </Modal>
 
     {/* ================= BOTTOM LOGS ================= */}
     <div
