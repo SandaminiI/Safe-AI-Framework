@@ -176,16 +176,16 @@ def run_semgrep_smart_fix(code_blob: str) -> Dict[str, Any]:
                 }
             
             langs = detect_languages(sorted(rel_to_abs.keys()), fence_lang)
-            print(f"  🌐 Detected languages: {langs}")  # FIX: debug log to verify detection
+            print(f"   Detected languages: {langs}")  # FIX: debug log to verify detection
 
             packs = BASE_PACKS.copy()
             for lg in langs:
                 packs.extend(LANG_PACKS.get(lg, []))
             packs = list(dict.fromkeys(packs))
-            print(f"  📦 Using packs: {packs}")  # FIX: debug log to verify packs selected
+            print(f"   Using packs: {packs}")  # FIX: debug log to verify packs selected
             
             # Initial scan
-            print(f"  🔍 Scanning with {len(packs)} rule packs...")
+            print(f"   Scanning with {len(packs)} rule packs...")
             exit_code, stdout, stderr = _run_semgrep_scan(td, packs, autofix=False)
             
             if exit_code == -1:
