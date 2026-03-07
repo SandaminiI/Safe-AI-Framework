@@ -199,7 +199,7 @@ def run_semgrep_smart_fix(code_blob: str) -> Dict[str, Any]:
             initial_findings = scan_data.get("results", [])
             
             if not initial_findings:
-                print("  ✅ No security issues found")
+                print("  ✔ No security issues found")
                 return {
                     "ok": True,
                     "autofix_applied": False,
@@ -225,7 +225,7 @@ def run_semgrep_smart_fix(code_blob: str) -> Dict[str, Any]:
             manual_only = categorized["manual_only"]
             
             print(f"  📊 Found {len(initial_findings)} issues:")
-            print(f"     ✅ {len(auto_fixable)} auto-fixable (Semgrep)")
+            print(f"     ✔ {len(auto_fixable)} auto-fixable (Semgrep)")
             print(f"     🔧 {len(manual_only)} need LLM/manual")
             
             if auto_fixable:
@@ -252,7 +252,7 @@ def run_semgrep_smart_fix(code_blob: str) -> Dict[str, Any]:
                 recategorized = _categorize_findings(remaining_findings)
                 
                 fixes_applied = len(initial_findings) - len(remaining_findings)
-                print(f"  ✅ Semgrep fixed {fixes_applied} of {len(initial_findings)}")
+                print(f"  ✔ Semgrep fixed {fixes_applied} of {len(initial_findings)}")
                 
                 return {
                     "ok": True,
