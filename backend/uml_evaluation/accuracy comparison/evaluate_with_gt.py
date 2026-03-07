@@ -37,7 +37,6 @@ GT_FILES = {
     "10": "ground_truth_10",
     "11": "ground_truth_11",
     "12": "ground_truth_12",
-    "13": "ground_truth_13",
 }
 
 
@@ -503,8 +502,8 @@ def print_summary(all_results, diagram_types):
 
         if rf is not None and af is not None:
             gap = round(rf - af, 1)
-            if   gap >  5: winner = "Regex ✅"
-            elif gap < -5: winner = "AI ✅"
+            if   gap >  5: winner = "Regex "
+            elif gap < -5: winner = "AI "
             else:          winner = "≈ Tie"
         else:
             winner = "N/A"
