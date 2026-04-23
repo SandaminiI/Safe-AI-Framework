@@ -1,6 +1,7 @@
 import time
 import re
 import uuid
+import shutil
 from pathlib import Path
 import docker
 
@@ -148,3 +149,64 @@ def get_plugin_host_port(container) -> str:
             f"Container '{container.name}' port binding exists but HostPort is empty."
         )
     return host_port
+
+
+def delete_plugin(slug: str) -> Path:
+    """
+    Deletes the plugin directory for the given slug recursively.
+    Returns the path that was deleted.
+    Raises FileNotFoundError if the plugin does not exist.
+    Raises ValueError on invalid slug or path traversal attempt.
+    """
+    slug = _sanitize_slug(slug)
+    p = (PLUGINS_ROOT / slug).resolve()
+    # Prevent path traversal: p must be a direct child of PLUGINS_ROOT
+    if PLUGINS_ROOT not in p.parents:
+        raise ValueError(f"Path traversal detected: {p}")
+    if not p.exists():
+        raise FileNotFoundError(f"Plugin '{slug}' not found.")
+    shutil.rmtree(p)
+    return p
+
+
+def list_running_plugins() -> list[dict]:
+    """
+    Returns a list of currently running plugin containers.
+    Each entry: { "slug": str, "host_port": str, "base_url": str, "name": str }
+    """
+    results = []
+    try:
+        containers = docker_client.containers.list(
+            filters={"name": "plugin_", "status": "running"}
+        )
+        for c in containers:
+            # Container names start with "plugin_<slug>" (Docker prepends "/")
+            raw_name = c.name.lstrip("/")
+            if not raw_name.startswith("plugin_"):
+                continue
+            # Extract slug: strip the "plugin_" prefix; for reuse=False names like
+            # "plugin_<slug>_<hex>" we still want the slug portion.
+            remainder = raw_name[len("plugin_"):]
+            # The slug cannot contain "_" only by the SLUG_RE (it CAN contain "_").
+            # The safest heuristic: use the full remainder as slug (reuse=True containers
+            # have name == "plugin_<slug>" exactly). For ephemeral ones we surface the
+            # full remainder, which is fine for display/stop purposes.
+            slug = remainder
+
+            ports = c.attrs.get("NetworkSettings", {}).get("Ports", {})
+            bindings = ports.get("9000/tcp")
+            if not bindings:
+                continue
+            host_port = bindings[0].get("HostPort")
+            if not host_port:
+                continue
+
+            results.append({
+                "slug": slug,
+                "host_port": host_port,
+                "base_url": f"http://127.0.0.1:{host_port}",
+                "name": raw_name,
+            })
+    except Exception:
+        pass
+    return results

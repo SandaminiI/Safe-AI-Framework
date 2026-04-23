@@ -134,25 +134,26 @@ const Modal: React.FC<{
           width,
           maxWidth: "95vw",
           maxHeight: "90vh",
-          background: "#ffffff",
+          background: "#1a1328",
           borderRadius: 12,
-          border: "1px solid #e2e8f0",
+          border: "1px solid #0f0b1a",
           boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
+          color: "white",
         }}
       >
         <div
           style={{
             padding: "14px 16px",
-            borderBottom: "1px solid #e2e8f0",
+            borderBottom: "1px solid #2e1065",
             display: "flex",
             alignItems: "center",
             gap: 8,
           }}
         >
-          <div style={{ fontWeight: 800, fontSize: 16, color: "#0f172a" }}>
+          <div style={{ fontWeight: 800, fontSize: 16, color: "white" }}>
             {title || "Dialog"}
           </div>
           <button
@@ -165,14 +166,14 @@ const Modal: React.FC<{
               cursor: "pointer",
               fontSize: 22,
               lineHeight: 1,
-              color: "#334155",
+              color: "#e2e8f0",
             }}
             title="Close"
           >
             ×
           </button>
         </div>
-        <div style={{ padding: 16, overflow: "auto" }}>{children}</div>
+        <div style={{ padding: 16, overflow: "auto", background: "#1a1328" }}>{children}</div>
       </div>
     </div>
   );
@@ -219,7 +220,9 @@ function Dashboard() {
   // Live URLs
   const [frontUrl, setFrontUrl] = useState<string>("");
   const [backUrl, setBackUrl] = useState<string>("");
-  // const [showPreview, setShowPreview] = useState<boolean>(true);
+  const [coreStarting, setCoreStarting] = useState<boolean>(false);
+  const readyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // const [showPreview, setShowPreview] = useState<boolean>(false);
 
   // Plugin modal
   const [showPluginModal, setShowPluginModal] = useState(false);
@@ -229,6 +232,21 @@ function Dashboard() {
   const [runningPlugins, setRunningPlugins] = useState<
     { name: string; url: string }[]
   >([]);
+
+  async function refreshRunningPlugins() {
+    try {
+      const { data } = await axios.get(`${API}/core/plugins/running`);
+      const list: { name: string; url: string }[] = (data.running ?? []).map(
+        (entry: { slug: string; base_url: string }) => ({
+          name: entry.slug,
+          url: entry.base_url,
+        })
+      );
+      setRunningPlugins(list);
+    } catch {
+      // silently ignore — not critical
+    }
+  }
 // const [pluginBaseUrl, setPluginBaseUrl] = useState<string>("");
 // const [pluginResult, setPluginResult] = useState<string>("");
 
@@ -254,6 +272,7 @@ function Dashboard() {
       });
 
       setSelectedPlugin("");
+      await refreshRunningPlugins();
     } catch (err: any) {
       alert(err?.message ?? "Failed to start plugin");
     }
@@ -287,10 +306,11 @@ async function onStopPlugin(name?: string) {
   try {
     await stopPlugin({ slug: pluginName });
 
-    // Remove from running list
+    // Remove from running list immediately, then confirm with backend
     setRunningPlugins((prev) =>
       prev.filter((p) => p.name !== pluginName)
     );
+    await refreshRunningPlugins();
 
     // If stopped via input, clear input
     if (!name) {
@@ -311,7 +331,21 @@ async function onStopPlugin(name?: string) {
     setStatus(data);
   }
   useEffect(() => {
-    refresh();
+    // Fire all initialization requests in parallel instead of waiting for
+    // status first and then triggering tree/candidates/docker as a second
+    // round-trip. Tree and candidates silently handle 404 if no project exists.
+    Promise.all([
+      refresh(),
+      refreshRunningPlugins(),
+      loadTree("").catch(() => {}),
+      loadNodeCandidates().catch(() => {}),
+      dockerList().catch(() => {}),
+    ]);
+
+    // Cleanup readiness polling on unmount
+    return () => {
+      if (readyPollRef.current) { clearInterval(readyPollRef.current); readyPollRef.current = null; }
+    };
   }, []);
 
   // Upload folder
@@ -479,16 +513,52 @@ async function onStopPlugin(name?: string) {
       return;
     }
 
+    // Stop any previous polling timer
+    if (readyPollRef.current) { clearInterval(readyPollRef.current); readyPollRef.current = null; }
+
     setBusy(true);
+    setCoreStarting(true);
     try {
       await axios.post(`${API}/core/docker/start-both`, { apps });
-      await dockerList();
-      alert("Started selected subdirs in Docker.");
+      await dockerList(); // record port mappings immediately
     } catch (e: any) {
       alert(e?.response?.data?.detail ?? e.message ?? "Docker start failed");
-    } finally {
       setBusy(false);
+      setCoreStarting(false);
+      return;
     }
+    setBusy(false);
+
+    // Start fast frontend-driven readiness polling (every 800 ms).
+    // The backend /core/docker/ready endpoint is a single instant probe
+    // that returns {ready: true/false} without blocking.
+    const portToCheck = dockerFrontPort || "3000";
+    let elapsed = 0;
+    const INTERVAL = 800;
+    const MAX_MS = 120_000; // give up after 2 min
+
+    readyPollRef.current = setInterval(async () => {
+      elapsed += INTERVAL;
+      try {
+        const { data } = await axios.get(`${API}/core/docker/ready`, {
+          params: { port: portToCheck },
+          timeout: 2_000,
+        });
+        if (data?.ready) {
+          // Service is up — stop polling and refresh URLs
+          if (readyPollRef.current) { clearInterval(readyPollRef.current); readyPollRef.current = null; }
+          await dockerList();
+          setCoreStarting(false);
+        }
+      } catch {
+        // network glitch — just retry on next tick
+      }
+      if (elapsed >= MAX_MS && readyPollRef.current) {
+        clearInterval(readyPollRef.current);
+        readyPollRef.current = null;
+        setCoreStarting(false);
+      }
+    }, INTERVAL);
   }
 
   async function dockerList() {
@@ -519,7 +589,9 @@ async function onStopPlugin(name?: string) {
 
   async function dockerStopAll() {
     if (!confirm("Stop and remove ALL containers started by this tool?")) return;
+    if (readyPollRef.current) { clearInterval(readyPollRef.current); readyPollRef.current = null; }
     setBusy(true);
+    setCoreStarting(false);
     try {
       await axios.post(`${API}/core/docker/stop-all`);
       await dockerList();
@@ -644,6 +716,23 @@ async function onStopPlugin(name?: string) {
         >
           Stop All Containers
         </button> */}
+        {/* Core-system startup status / ready link */}
+        {coreStarting && (
+          <span style={{ fontSize: 12, color: "#a78bfa", padding: "0 4px" }}>
+            Starting Core System…
+          </span>
+        )}
+        {frontUrl && !coreStarting && (
+          <a
+            href={frontUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ ...navBtn, textDecoration: "none", background: "#166534", border: "#166534", color: "#86efac" }}
+          >
+            Open Core System ↗
+          </a>
+        )}
+
         <button
           onClick={() => navigate("/PluginRegistryPage")}
           style={navBtn}

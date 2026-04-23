@@ -2,8 +2,9 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import Editor from "@monaco-editor/react";
+import { Trash2 } from "lucide-react";
 
-const API_DEFAULT = "http://localhost:8010";
+const API_DEFAULT = import.meta.env.VITE_CORE_URL;
 
 /* ---- small shared UI bits ---- */
 const Card: React.FC<{ children: React.ReactNode; style?: React.CSSProperties }> = ({ children, style }) => (
@@ -55,6 +56,7 @@ export default function PluginStudioPage({
   compact?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [slug, setSlug] = useState("");
   const [title, setTitle] = useState("");
   const [entryCode, setEntryCode] = useState("");
@@ -112,6 +114,21 @@ export default function PluginStudioPage({
     }
   }
 
+  async function deletePlugin(name: string) {
+    if (!window.confirm(`Are you sure you want to delete the plugin "${name}"? This cannot be undone.`)) {
+      return;
+    }
+    setDeleting(name);
+    try {
+      await axios.delete(`${apiBase}/core/plugins/${encodeURIComponent(name)}`);
+      await refreshList();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail ?? e.message ?? "Failed to delete plugin");
+    } finally {
+      setDeleting(null);
+    }
+  }
+
   // function loadExisting(name: string) {
   //   setSlug(name);
   //   setTitle(name.replace(/[-_]/g, " "));
@@ -123,7 +140,7 @@ export default function PluginStudioPage({
       display: "flex",
       gap: 24,
       width: "100%",
-      color: "#1a1328",
+      color: "white",
     }}
   >
     {/* LEFT SIDE */}
@@ -200,18 +217,6 @@ export default function PluginStudioPage({
           Save Plugin
         </button>
 
-        <button
-          onClick={refreshList}
-          disabled={busy}
-          style={{
-            ...navBtn,
-            background: "transparent",
-            border: "1px solid #4F0C87",
-            color: "#a78bfa",
-          }}
-        >
-          Reload Plugin List
-        </button>
       </div>
     </div>
 
@@ -254,16 +259,36 @@ export default function PluginStudioPage({
               {p}
             </div>
 
-            {/* <button
-              onClick={() => loadExisting(p)}
+            <button
+              onClick={() => deletePlugin(p)}
+              disabled={deleting === p || busy}
+              title={`Delete plugin "${p}"`}
               style={{
-                ...navBtn,
-                padding: "6px 10px",
-                fontSize: 12,
+                background: "transparent",
+                border: "1px solid #D30027",
+                borderRadius: 6,
+                padding: "5px 7px",
+                cursor: deleting === p ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                opacity: deleting === p ? 0.5 : 1,
+                color: "#D30027",
+                transition: "border-color 0.15s, background 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                if (deleting !== p) {
+                  (e.currentTarget as HTMLButtonElement).style.background = "#450a0a";
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#f87171";
+                }
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "#D30027";
               }}
             >
-              Run Plugin
-            </button> */}
+              <Trash2 size={14} />
+            </button>
+            
           </div>
         ))}
 

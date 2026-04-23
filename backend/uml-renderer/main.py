@@ -4,9 +4,6 @@ from typing import Optional
 from pathlib import Path
 from plantuml_runner import PlantUMLRenderer
 
-# TODO: change this path to where your plantuml.jar is actually stored
-# PLANTUML_JAR_PATH = r"D:\SLIIT\Year 4\RP\PROJECT\tools\plantuml.jar"
-#PLANTUML_JAR_PATH = r"C:\Users\ASUS\Desktop\Safe-AI-Framework\tools\plantuml.jar"
 BASE_DIR = Path(__file__).resolve().parent
 PLANTUML_JAR_PATH = str(BASE_DIR / "tools" / "plantuml.jar")
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from cir.model import TypeDecl, Field, Method, Parameter
@@ -71,6 +72,58 @@ _OPTIONAL_PREFIXES = (
     "Optional[",
     "Union[",
 )
+
+
+# ---------------------------------------------------------------------------
+# FIX A: Package extraction — derive a clean logical package name from filepath
+# ---------------------------------------------------------------------------
+
+def _extract_package(filepath: Optional[str]) -> str:
+    """
+    Derive a clean logical package name from a Python source file path.
+
+    Priority:
+      1. If the file lives inside a proper Python package (has __init__.py
+         siblings), walk up to find the package root and return the dotted
+         package path.
+      2. Otherwise return just the file's stem (filename without .py),
+         converted to a clean identifier.
+      3. Fall back to "(default)".
+
+    Never returns a full absolute path, so temp-file paths such as
+    C:\\Users\\HP\\AppData\\Local\\Temp\\tmpdzvzkxsr\\Main are reduced to
+    just "Main" (or "(default)" when the stem looks like a random hash).
+    """
+    if not filepath:
+        return "(default)"
+
+    filepath = os.path.normpath(filepath)
+    stem = os.path.splitext(os.path.basename(filepath))[0]
+
+    # Walk upward collecting package segments while __init__.py exists
+    segments = []
+    current_dir = os.path.dirname(filepath)
+    for _ in range(10):  # max 10 levels
+        if os.path.isfile(os.path.join(current_dir, "__init__.py")):
+            segments.insert(0, os.path.basename(current_dir))
+            current_dir = os.path.dirname(current_dir)
+        else:
+            break
+
+    if segments:
+        return ".".join(segments)
+
+    # No package structure — use just the stem, cleaned up
+    clean = re.sub(r"[^a-zA-Z0-9_]", "_", stem).strip("_")
+    if not clean or len(clean) < 2:
+        return "(default)"
+
+    # If the stem looks like a temp hash (all lowercase letters+digits, no
+    # underscores or uppercase letters, 8+ chars) treat it as a temp artifact
+    if re.match(r"^[a-z0-9]{8,}$", clean) and not re.search(r"[_A-Z]", stem):
+        return "(default)"
+
+    return clean
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +239,7 @@ def _is_abc_interface(node: ast.ClassDef) -> bool:
     if not methods:
         return False
     return all(_method_flags(m)[1] for m in methods)
+
 
 def _extract_module_vars(tree: ast.Module) -> Dict[str, str]:
     """
@@ -431,7 +485,7 @@ class PythonAdapter:
                 self._process_module(
                     code, graph, type_nodes, units,
                     source_file=path,
-                    project_module_vars=all_module_vars, 
+                    project_module_vars=all_module_vars,
                 )
             except ValueError as e:
                 errors.append({"file": path, "error": str(e)})
@@ -480,6 +534,7 @@ class PythonAdapter:
                 source_file=source_file,
                 module_vars=module_vars,
             )
+
     def _process_class(
         self,
         node: ast.ClassDef,
@@ -500,12 +555,16 @@ class PythonAdapter:
 
         type_id = f"type:{full_name}"
 
+        # FIX A: derive a clean logical package name from source_file rather
+        # than using the raw module_name (which may contain a full temp path).
+        package = _extract_package(source_file)
+
         type_decl = TypeDecl(
             id=type_id,
             name=short_name,
             kind=kind,
             visibility="public",
-            package=module_name,
+            package=package,
             modifiers=("abstract",) if is_abstract_class else (),
             is_abstract=is_abstract_class,
             is_final=False,
@@ -804,7 +863,7 @@ class PythonAdapter:
                     # Resolution priority:
                     #   1. self-fields (self.db_manager = DatabaseManager())
                     #   2. method parameters
-                    #   3. module-level singleton variables 
+                    #   3. module-level singleton variables
                     var_type = field_type_by_name.get(qual)
                     if not var_type:
                         var_type = method_param_types.get(src_method_id, {}).get(qual)

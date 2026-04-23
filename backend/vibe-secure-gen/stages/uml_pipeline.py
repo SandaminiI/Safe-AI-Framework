@@ -4,13 +4,14 @@ backend/vibe-secure-gen/stages/uml_pipeline.py
 UML pipeline entry point used by pipeline.py.
 
 - Materializes the LLM-generated code blob into temp files
-- Filters to supported languages (java, python)
+- Filters to supported languages (java, python, javascript, typescript)
 - Calls /parse/project on parser-core for each language
 - Merges all CIRs into one if multiple languages are present
 - Generates diagrams via rule-based (uml-gen-regex) and AI-based (uml-gen-ai)
 - Returns a unified report
 
-Diagram types: class, package, sequence, component, activity"""
+Diagram types: class, package, sequence, component, activity
+"""
 
 from __future__ import annotations
 
@@ -31,8 +32,20 @@ UML_REGEX_URL      = "http://127.0.0.1:7080/uml/regex"
 AI_UML_URL         = "http://127.0.0.1:7081/uml/ai"
 RENDER_URL         = "http://127.0.0.1:7090/render/svg"
 
-_SUPPORTED_LANGUAGES = {"java", "python"}
-_EXT_TO_LANG: Dict[str, str] = {".java": "java", ".py": "python"}
+_SUPPORTED_LANGUAGES = {"java", "python", "javascript", "typescript"}
+
+# File-extension → parse-core language name
+_EXT_TO_LANG: Dict[str, str] = {
+    ".java": "java",
+    ".py":   "python",
+    ".js":   "javascript",
+    ".jsx":  "javascript",
+    ".ts":   "typescript",
+    ".tsx":  "typescript",
+    ".mjs":  "javascript",
+    ".cjs":  "javascript",
+}
+
 _DIAGRAM_TYPES = ("class", "package", "sequence", "component", "activity")
 
 # Diagram-type icons shown in terminal
@@ -80,7 +93,6 @@ def _tlog(line: str = "") -> None:
 # ── Box / header helpers ──────────────────────────────────────────────────────
 
 def _banner(title: str) -> None:
-    """Full-width double-line banner (pipeline start/end)."""
     bar = "═" * (_W - 2)
     inner = f"  {title}"
     pad = _W - 2 - len(inner)
@@ -90,7 +102,6 @@ def _banner(title: str) -> None:
 
 
 def _step_header(n: int, total: int, title: str, color: str = _T.BLUE) -> None:
-    """Bold step separator with step counter."""
     tag    = f" STEP {n}/{total} "
     bar_l  = "━" * 4
     bar_r  = "━" * (_W - len(tag) - 6)
@@ -99,15 +110,12 @@ def _step_header(n: int, total: int, title: str, color: str = _T.BLUE) -> None:
 
 
 def _section(title: str, color: str = _T.BLUE) -> None:
-    """Thin sub-section line (used inside a step)."""
     _tlog(f"\n  {color}{_T.BOLD}┌─ {title}{_T.RESET}")
 
 
 def _divider(color: str = _T.DIM) -> None:
     _tlog(f"  {color}{_bar()}{_T.RESET}")
 
-
-# ── Line helpers ──────────────────────────────────────────────────────────────
 
 def _ok(label: str, detail: str = "", indent: int = 4) -> None:
     sp = " " * indent
@@ -147,7 +155,6 @@ def _file_tree(files: List[str], indent: int = 6) -> None:
 
 
 def _kv_table(rows: List[tuple], indent: int = 6, label_w: int = 22) -> None:
-    """Print a two-column key/value table."""
     sp = " " * indent
     _tlog(f"{sp}{_T.CYAN}{'Metric':<{label_w}}{_T.WHITE}{'Value'}{_T.RESET}")
     _tlog(f"{sp}{_T.DIM}{_bar('─', label_w + 10)}{_T.RESET}")
@@ -157,7 +164,6 @@ def _kv_table(rows: List[tuple], indent: int = 6, label_w: int = 22) -> None:
 
 
 def _summary_box(rows: List[tuple], ok: bool = True) -> None:
-    """Final double-line summary table."""
     bar   = "═" * (_W - 2)
     hdr   = "PIPELINE COMPLETE — SUCCESS" if ok else "PIPELINE COMPLETE — FAILED"
     hc    = _T.GREEN if ok else _T.RED
@@ -169,7 +175,6 @@ def _summary_box(rows: List[tuple], ok: bool = True) -> None:
     _tlog(f"╠{bar}╣{_T.RESET}")
     for label, value in rows:
         inner = f"  {_T.BOLD}{label:<22}{_T.RESET}  {value}"
-        # strip ANSI for length calc
         import re as _re
         clean = _re.sub(r"\033\[[0-9;]*m", "", inner)
         padding = _W - 2 - len(clean)
@@ -225,13 +230,10 @@ def _parse_project_to_cir(
     nodes = cir.get("nodes", [])
     edges = cir.get("edges", [])
 
-    # Classify nodes
     type_decl_count  = sum(1 for n in nodes if n.get("kind") == "TypeDecl")
     field_count      = sum(1 for n in nodes if n.get("kind") == "Field")
     method_count     = sum(1 for n in nodes if n.get("kind") == "Method")
     param_count      = sum(1 for n in nodes if n.get("kind") == "Parameter")
-
-    # Classify edges
     inherits_count   = sum(1 for e in edges if e.get("type") == "INHERITS")
     implements_count = sum(1 for e in edges if e.get("type") == "IMPLEMENTS")
     assoc_count      = sum(1 for e in edges if e.get("type") == "ASSOCIATES")
@@ -279,8 +281,6 @@ def _cir_to_uml_rule_based(
 
     for dt in _DIAGRAM_TYPES:
         _dtype_header(dt, _T.ORANGE)
-
-        # ── PlantUML generation ───────────────────────────────────────────────
         _info(f"POST /uml/regex", f"diagram_type={dt}  →  {UML_REGEX_URL}")
         t0 = time.time()
         try:
@@ -303,8 +303,8 @@ def _cir_to_uml_rule_based(
         errs     = uml_data.get("validation_errors") or []
         gen_time = _elapsed(t0)
 
-        out[f"{dt}_plantuml"]    = plantuml
-        out["validation"][dt]   = {"ok": ok_flag, "errors": errs}
+        out[f"{dt}_plantuml"]  = plantuml
+        out["validation"][dt] = {"ok": ok_flag, "errors": errs}
 
         lines_count = plantuml.count("\n") + 1 if plantuml.strip() else 0
 
@@ -320,7 +320,6 @@ def _cir_to_uml_rule_based(
         _ok("PlantUML generated",
             f"{lines_count} lines  ·  validation passed  ·  {gen_time}")
 
-        # ── SVG render ────────────────────────────────────────────────────────
         _info("POST /render/svg", f"uml-renderer :7090  →  {RENDER_URL}")
         t1 = time.time()
         try:
@@ -332,8 +331,7 @@ def _cir_to_uml_rule_based(
             svg_time = _elapsed(t1)
             out[f"{dt}_svg"] = svg
             success_count += 1
-            _ok("SVG rendered",
-                f"{len(svg):,} chars  ·  {svg_time}")
+            _ok("SVG rendered", f"{len(svg):,} chars  ·  {svg_time}")
         except Exception as exc:
             _err("SVG render failed",
                  f"{type(exc).__name__}: {exc}  ·  {_elapsed(t1)}")
@@ -371,8 +369,6 @@ def _cir_to_uml_ai(
 
     for dt in _DIAGRAM_TYPES:
         _dtype_header(dt, _T.MAGENTA)
-
-        # ── PlantUML generation ───────────────────────────────────────────────
         _info("POST /uml/ai", f"diagram_type={dt}  →  {AI_UML_URL}")
         t0 = time.time()
         try:
@@ -395,21 +391,19 @@ def _cir_to_uml_ai(
         errs     = uml_data.get("validation_errors") or []
         gen_time = _elapsed(t0)
 
-        out[f"{dt}_plantuml"]   = plantuml
-        out["validation"][dt]  = {"ok": ok_flag, "errors": errs}
+        out[f"{dt}_plantuml"]  = plantuml
+        out["validation"][dt] = {"ok": ok_flag, "errors": errs}
 
         lines_count = plantuml.count("\n") + 1 if plantuml.strip() else 0
 
         if not plantuml.strip():
-            _warn("LLM output empty",
-                  f"{gen_time}  ·  {len(errs)} error(s)")
+            _warn("LLM output empty", f"{gen_time}  ·  {len(errs)} error(s)")
             for e_msg in errs[:3]:
                 _sub(f"  {e_msg}", indent=8)
             out[f"{dt}_svg"] = None
             _divider()
             continue
 
-        # Log a soft warning if ok_flag is False but we still have content
         if not ok_flag:
             _warn("LLM validation warnings (attempting render anyway)",
                   f"{gen_time}  ·  {len(errs)} error(s)")
@@ -419,7 +413,6 @@ def _cir_to_uml_ai(
             _ok("PlantUML generated",
                 f"{lines_count} lines  ·  LLM inference  ·  {gen_time}")
 
-        # ── SVG render ────────────────────────────────────────────────────────
         _info("POST /render/svg", f"uml-renderer :7090  →  {RENDER_URL}")
         t1 = time.time()
         try:
@@ -457,8 +450,8 @@ def _merge_cirs(cirs: List[Dict[str, Any]]) -> Dict[str, Any]:
     if len(cirs) == 1:
         return cirs[0]
 
-    all_nodes:    List[Dict[str, Any]] = []
-    all_edges:    List[Dict[str, Any]] = []
+    all_nodes:     List[Dict[str, Any]] = []
+    all_edges:     List[Dict[str, Any]] = []
     seen_node_ids: set = set()
     seen_edges:    set = set()
 
@@ -492,22 +485,24 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
     3. CIR generation   (one sub-step per language group)
     4. Rule-based UML generation  (uml-gen-regex + uml-renderer)
     5. AI-based UML generation    (uml-gen-ai + uml-renderer)
-    Final summary table"""
+    Final summary table
+    """
 
     pipeline_t0 = time.time()
     started_at  = datetime.datetime.now().strftime("%H:%M:%S")
 
-    # ── Banner ────────────────────────────────────────────────────────────────
     _banner("  UML VISUALIZATION PIPELINE  ·  vibe-secure-gen")
-    _tlog(f"  {_T.DIM}Started {started_at}  ·  dual-mode (regex + AI)"
-          f"  ·  services: parse-core:7070  regex:7080  ai:7081  renderer:7090{_T.RESET}")
+    _tlog(
+        f"  {_T.DIM}Started {started_at}  ·  dual-mode (regex + AI)"
+        f"  ·  services: parse-core:7070  regex:7080  ai:7081  renderer:7090{_T.RESET}"
+    )
 
     try:
         # ── STEP 1 : File materialisation ─────────────────────────────────────
         _step_header(1, 5, "FILE MATERIALISATION", _T.BLUE)
 
         fence_lang, _ = strip_fence(code_blob)
-        _info("Fence language detected", fence_lang or "none")
+        #_info("Fence language detected", fence_lang or "none")
 
         with tempfile.TemporaryDirectory() as td:
             t0 = time.time()
@@ -528,8 +523,9 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
 
             lang_files: Dict[str, Dict[str, str]] = {}
             for rel, abs_path in rel_to_abs.items():
+                rel_lower = rel.lower()
                 for ext, lang_name in _EXT_TO_LANG.items():
-                    if rel.lower().endswith(ext):
+                    if rel_lower.endswith(ext):
                         lang_files.setdefault(lang_name, {})[rel] = abs_path
                         break
 
@@ -539,13 +535,18 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 if lang in _SUPPORTED_LANGUAGES and files
             }
 
-            java_n    = len(lang_files.get("java",   {}))
-            python_n  = len(lang_files.get("python", {}))
-            skipped_n = len(rel_to_abs) - java_n - python_n
+            java_n    = len(lang_files.get("java",       {}))
+            python_n  = len(lang_files.get("python",     {}))
+            js_n      = len(lang_files.get("javascript", {}))
+            ts_n      = len(lang_files.get("typescript", {}))
+            skipped_n = len(rel_to_abs) - java_n - python_n - js_n - ts_n
 
-            _ok("File classification complete",
+            _ok(
+                "File classification complete",
                 f"{python_n} Python  ·  {java_n} Java"
-                + (f"  ·  {skipped_n} skipped (unsupported)" if skipped_n else ""))
+                f"  ·  {js_n} JS  ·  {ts_n} TS"
+                + (f"  ·  {skipped_n} skipped (unsupported)" if skipped_n else ""),
+            )
 
             if not supported_files:
                 detected_str = ", ".join(langs) or "unknown"
@@ -556,15 +557,17 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
                 )
 
             for lang_name, files in supported_files.items():
-                _sub(f"→ {lang_name.capitalize()} queue",
-                     f"{len(files)} file(s)  →  parse-core :7070")
+                _sub(
+                    f"→ {lang_name.capitalize()} queue",
+                    f"{len(files)} file(s)  →  parse-core :7070",
+                )
 
             # ── STEP 3 : CIR generation (per language) ────────────────────────
-            cir_parts: List[Dict[str, Any]] = []
+            cir_parts:   List[Dict[str, Any]] = []
             total_files = 0
-            lang_list = sorted(supported_files.keys())
+            lang_list   = sorted(supported_files.keys())
 
-            for i, lang_name in enumerate(lang_list):
+            for lang_name in lang_list:
                 cir = _parse_project_to_cir(
                     lang_name,
                     supported_files[lang_name],
@@ -577,9 +580,11 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             merged_cir = _merge_cirs(cir_parts)
 
             if len(cir_parts) > 1:
-                _tlog(f"\n  {_T.CYAN}{_T.BOLD}◉  Merged {len(cir_parts)} CIR graphs{_T.RESET}"
-                      f"  {_T.DIM}→  {len(merged_cir.get('nodes',[]))} nodes"
-                      f"  ·  {len(merged_cir.get('edges',[]))} edges{_T.RESET}")
+                _tlog(
+                    f"\n  {_T.CYAN}{_T.BOLD}◉  Merged {len(cir_parts)} CIR graphs{_T.RESET}"
+                    f"  {_T.DIM}→  {len(merged_cir.get('nodes', []))} nodes"
+                    f"  ·  {len(merged_cir.get('edges', []))} edges{_T.RESET}"
+                )
 
             # ── STEP 4 : Rule-based UML ────────────────────────────────────────
             uml_rule = _cir_to_uml_rule_based(merged_cir, step_n=4, step_total=5)
@@ -588,11 +593,13 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             try:
                 uml_ai = _cir_to_uml_ai(merged_cir, step_n=5, step_total=5)
             except Exception as exc:
-                _err("AI UML pipeline raised an unhandled exception",
-                     f"{type(exc).__name__}: {exc}")
+                _err(
+                    "AI UML pipeline raised an unhandled exception",
+                    f"{type(exc).__name__}: {exc}",
+                )
                 uml_ai = {
-                    "error":      f"AI UML pipeline failed: {type(exc).__name__}: {exc}",
-                    "validation": {},
+                    "error":          f"AI UML pipeline failed: {type(exc).__name__}: {exc}",
+                    "validation":     {},
                     "_success_count": 0,
                 }
 
@@ -605,58 +612,57 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
             cir_nodes = len(merged_cir.get("nodes", []))
             cir_edges = len(merged_cir.get("edges", []))
 
-            _summary_box([
-                ("Status",
-                 f"{_T.GREEN}✔  SUCCESS{_T.RESET}" if all_ok
-                 else f"{_T.YELLOW}⚠  PARTIAL{_T.RESET}"),
-                ("Files processed",
-                 f"{total_files}  ({', '.join(lang_list)})"),
-                ("CIR graph",
-                 f"{cir_nodes} nodes  ·  {cir_edges} edges"),
-                ("Diagram types",
-                 ", ".join(dt.capitalize() for dt in _DIAGRAM_TYPES)),
-                ("Rule-based SVGs",
-                 f"{rb_ok}/{len(_DIAGRAM_TYPES)}  generated"),
-                ("AI-based SVGs",
-                 f"{ai_ok}/{len(_DIAGRAM_TYPES)}  generated"),
-                ("Total duration",
-                 total_duration),
-            ], ok=all_ok)
+            _summary_box(
+                [
+                    (
+                        "Status",
+                        f"{_T.GREEN}✔  SUCCESS{_T.RESET}"
+                        if all_ok
+                        else f"{_T.YELLOW}⚠  PARTIAL{_T.RESET}",
+                    ),
+                    ("Files processed",   f"{total_files}  ({', '.join(lang_list)})"),
+                    ("CIR graph",         f"{cir_nodes} nodes  ·  {cir_edges} edges"),
+                    ("Diagram types",     ", ".join(dt.capitalize() for dt in _DIAGRAM_TYPES)),
+                    ("Rule-based SVGs",   f"{rb_ok}/{len(_DIAGRAM_TYPES)}  generated"),
+                    ("AI-based SVGs",     f"{ai_ok}/{len(_DIAGRAM_TYPES)}  generated"),
+                    ("Total duration",    total_duration),
+                ],
+                ok=all_ok,
+            )
 
-            # ── Build and return final result ──────────────────────────────────
             return {
-                "ok":            True,
-                "file_count":    total_files,
-                "error":         None,
+                "ok":         True,
+                "file_count": total_files,
+                "error":      None,
 
-                # ── Rule-based SVGs (backward-compatible) ──────────────────
+                # Rule-based SVGs
                 "class_svg":     uml_rule.get("class_svg"),
                 "package_svg":   uml_rule.get("package_svg"),
                 "sequence_svg":  uml_rule.get("sequence_svg"),
                 "component_svg": uml_rule.get("component_svg"),
                 "activity_svg":  uml_rule.get("activity_svg"),
 
-                # ── AI-generated SVGs
+                # AI-generated SVGs
                 "ai_class_svg":     uml_ai.get("class_svg"),
                 "ai_package_svg":   uml_ai.get("package_svg"),
                 "ai_sequence_svg":  uml_ai.get("sequence_svg"),
                 "ai_component_svg": uml_ai.get("component_svg"),
                 "ai_activity_svg":  uml_ai.get("activity_svg"),
 
-                # ── PlantUML sources for both methods ──────────────────────
+                # PlantUML sources
                 "ai_class_plantuml":     uml_ai.get("class_plantuml"),
                 "ai_package_plantuml":   uml_ai.get("package_plantuml"),
                 "ai_sequence_plantuml":  uml_ai.get("sequence_plantuml"),
                 "ai_component_plantuml": uml_ai.get("component_plantuml"),
                 "ai_activity_plantuml":  uml_ai.get("activity_plantuml"),
 
-                # ── Validation maps ────────────────────────────────────────
+                # Validation maps
                 "validation":    uml_rule.get("validation", {}),
                 "ai_validation": uml_ai.get("validation", {}),
 
-                # ── Raw sub-results (for debugging / future use) ───────────
-                "rule_based":    uml_rule,
-                "ai":            uml_ai,
+                # Raw sub-results
+                "rule_based": uml_rule,
+                "ai":         uml_ai,
             }
 
     except Exception as exc:
@@ -671,17 +677,19 @@ def run_uml_pipeline_over_blob(code_blob: str) -> Dict[str, Any]:
 
 def _error_result(msg: str, file_count: int = 0) -> Dict[str, Any]:
     _err(msg)
-    _summary_box([
-        ("Status",         f"{_T.RED}✘  ERROR{_T.RESET}"),
-        ("Message",        msg[:55] + ("…" if len(msg) > 55 else "")),
-        ("Files processed", str(file_count)),
-    ], ok=False)
+    _summary_box(
+        [
+            ("Status",          f"{_T.RED}✘  ERROR{_T.RESET}"),
+            ("Message",         msg[:55] + ("…" if len(msg) > 55 else "")),
+            ("Files processed", str(file_count)),
+        ],
+        ok=False,
+    )
     return {
-        "ok":            False,
-        "file_count":    file_count,
-        "error":         msg,
+        "ok":         False,
+        "file_count": file_count,
+        "error":      msg,
 
-        # Rule-based
         "class_svg":     None,
         "package_svg":   None,
         "sequence_svg":  None,

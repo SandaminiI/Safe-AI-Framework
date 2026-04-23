@@ -31,7 +31,6 @@ from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _s(x: Any) -> str:
-    """Safe stringify, collapse whitespace."""
     if x is None:
         return ""
     return re.sub(r"\s+", " ", str(x)).strip()
@@ -50,7 +49,7 @@ _VIS_SYMBOL: Dict[str, str] = {
     "protected": "#",
     "private":   "-",
     "package":   "~",
-    "":          "+",          # default to public
+    "":          "+",
 }
 
 
@@ -63,7 +62,6 @@ def _is_dunder(name: str) -> bool:
 
 
 def _clean_type(raw: str) -> str:
-    """Strip leading module path, e.g. 'java.util.List<String>' → 'List<String>'."""
     if not raw:
         return "void"
     base = raw.split("[")[0].split("<")[0]
@@ -74,7 +72,6 @@ def _clean_type(raw: str) -> str:
 
 
 def _clean_type_short(raw: str) -> str:
-    """Strip generics entirely, just keep base name."""
     if not raw:
         return ""
     t = re.sub(r"<.*?>", "", raw)
@@ -103,7 +100,7 @@ def _build_edge_maps(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Attribute reader  (handles both top-level and nested-attrs schemas)
+#  Attribute reader
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get(node: Dict[str, Any], *keys: str, default: str = "") -> str:
@@ -190,7 +187,54 @@ def _layer_order(type_name: str, package: str) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Model / POJO detection (for excluding from activity flow)
+#  Infrastructure noise filter  (shared with uml_rules.py logic)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NOISE_NAME_SUFFIXES: Tuple[str, ...] = (
+    "exception", "error",
+    "logger",
+    "util", "utils",
+    "helper", "helpers",
+    "config", "configuration",
+    "filter",
+    "framework",
+    "application", "main",
+)
+
+_NOISE_NAME_CONTAINS: Tuple[str, ...] = (
+    "logger",
+    "logutil",
+    "filterchain",
+)
+
+_NOISE_PKG_SEGMENTS: Tuple[str, ...] = (
+    "exception", "exceptions",
+    "error",     "errors",
+    "util",      "utils",
+    "helper",    "helpers",
+    "log",       "logger",   "logging",
+    "config",    "configuration",
+    "filter",    "filters",
+    "framework",
+)
+
+
+def _is_infrastructure_noise(name: str, package: str) -> bool:
+    nm   = (name    or "").lower()
+    pkg  = (package or "").lower()
+    segs = set(pkg.replace("-", ".").split("."))
+
+    if any(nm.endswith(sfx) for sfx in _NOISE_NAME_SUFFIXES):
+        return True
+    if any(kw in nm for kw in _NOISE_NAME_CONTAINS):
+        return True
+    if segs & set(_NOISE_PKG_SEGMENTS):
+        return True
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Model / POJO detection
 # ─────────────────────────────────────────────────────────────────────────────
 
 _MODEL_PKG_KW     = {"model", "entity", "domain", "dto", "vo", "bean", "pojo"}
@@ -435,17 +479,21 @@ def _summarize_activity(
     """
     Build a rich activity-diagram context for the LLM.
 
-    Emits:
-      - Architectural component lanes with their classification
-      - Ordered CALLS chains extracted from CIR edges
-      - Method signatures with parameter types and return types
-      - Guard / loop / action classification hints
-      - A concise CRITICAL RULES block reminding the LLM about the
-        swimlane-vs-structured-block constraint
+    Key fix vs original:
+      _is_infrastructure_noise() types (DatabaseUtil, PasswordUtil, ConfigUtil,
+      LoggerUtil, *Config, *Util, *Helper …) are now excluded from active_types
+      AND from the call chain.  Previously these stayed in active_types and their
+      CALLS edges (layer=60-70) dominated the sorted chain because the App/Main
+      class (layer=55 default) called them first, producing a shallow 5-7 node
+      diagram that completely missed the real business logic.
+
+    With noise excluded, LibraryService (layer=20), BookDAO/MemberDAO/LoanDAO
+    (layer=30) etc. become the active types and their rich CALLS chains fill
+    the diagram correctly.
     """
 
     # ── Index methods ──────────────────────────────────────────────────────
-    method_owner: Dict[str, str] = {}       # method_id → type_id
+    method_owner: Dict[str, str] = {}
     methods_by_type: Dict[str, List[Dict[str, Any]]] = {t: [] for t in type_info}
     method_attrs: Dict[str, Dict[str, Any]] = {}
 
@@ -469,7 +517,7 @@ def _summarize_activity(
                 if pn and pn.get("kind") == "Parameter":
                     params_by_method.setdefault(mid, []).append(pn.get("attrs", {}))
 
-    # ── Index CALLS edges (ordered) ────────────────────────────────────────
+    # ── Index CALLS edges ──────────────────────────────────────────────────
     calls_raw: List[Dict[str, Any]] = []
     for e in edges:
         if e.get("type") != "CALLS":
@@ -485,16 +533,38 @@ def _summarize_activity(
 
     calls_raw.sort(key=lambda x: x.get("order", 0))
 
-    # ── Exclude pure model types ───────────────────────────────────────────
+    # ── Exclusion: pure model types AND infrastructure noise ───────────────
+    #
+    # FIX: The original only excluded _is_pure_model(). This left DatabaseUtil
+    # (layer=40), PasswordUtil, ConfigUtil (layer=70) in active_types. The
+    # App/Main class (layer=55 default) calls them first in the CALLS chain,
+    # so their 5-7 methods dominated the entire diagram output. The real
+    # business logic (LibraryService layer=20, BookDAO layer=30 etc.) never
+    # appeared because their CALLS edges came later in the sort.
+    #
+    # Now we exclude infrastructure noise types from active_types AND filter
+    # them from both src and dst positions in the call chain — exactly as the
+    # sequence and component diagram generators already do.
     excluded: Set[str] = set()
     for tid, attrs in type_info.items():
         nm  = _get(attrs, "name",    default="")
         pkg = _get(attrs, "package", default="")
         ms  = methods_by_type.get(tid, [])
-        if _is_pure_model(nm, pkg, ms):
+        if _is_pure_model(nm, pkg, ms) or _is_infrastructure_noise(nm, pkg):
             excluded.add(tid)
 
     active_types = {t: a for t, a in type_info.items() if t not in excluded}
+
+    # If everything got excluded (tiny utility-only project), fall back gracefully
+    if not active_types:
+        active_types = {t: a for t, a in type_info.items()
+                        if not _is_pure_model(
+                            _get(a, "name", default=""),
+                            _get(a, "package", default=""),
+                            methods_by_type.get(t, []),
+                        )}
+    if not active_types:
+        active_types = dict(type_info)
 
     def _participant_lane(tid: str) -> str:
         a   = type_info[tid]
@@ -556,7 +626,6 @@ def _summarize_activity(
         return rt or "void"
 
     def _guard_label(mid: str) -> str:
-        """Human-readable condition question for diamond nodes."""
         ma   = method_attrs.get(mid, {})
         name = ma.get("name") or ""
         nl   = name.lower()
@@ -567,6 +636,10 @@ def _summarize_activity(
                 "", name
             ).strip()
             if subject:
+                # FIX: preserve acronyms (ISBN, ID, URL) before camelCase split
+                # Step 1: collapse consecutive uppercase sequences into title-case
+                subject = re.sub(r'([A-Z]{2,})', lambda m: m.group(1).title(), subject)
+                # Step 2: now split camelCase normally
                 subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
             else:
                 subject = "result"
@@ -585,13 +658,16 @@ def _summarize_activity(
                 subject = name[len(prefix):]
                 if not subject:
                     subject = name
+                # FIX: same acronym-preserving split
+                subject = re.sub(r'([A-Z]{2,})', lambda m: m.group(1).title(), subject)
                 subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
                 return f"{subject}{suffix}"
 
-        return f"{name}?"
+        subject = re.sub(r'([A-Z]{2,})', lambda m: m.group(1).title(), name)
+        subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+        return f"{subject}?"
 
     # ── Build ordered call chain ───────────────────────────────────────────
-    # Group calls by (src_type layer, earliest call order) for coherent flow
     src_layer_info: Dict[str, Tuple[int, int]] = {}
     calls_by_src: Dict[str, List[Dict[str, Any]]] = {}
     for c in calls_raw:
@@ -615,12 +691,22 @@ def _summarize_activity(
 
     sorted_callers = sorted(src_layer_info.keys(), key=lambda m: src_layer_info[m])
 
+    # Dedup: (src_type_id, dst_method_id) — each caller type emits each dst method once
+    # Also apply per-caller cap (8) and global repeat cap (3) matching uml_rules.py fix
+    MAX_PER_CALLER  = 8
+    MAX_GLOBAL_REPS = 3
+
+    per_caller_emitted: Set[Tuple[str, str]] = set()
+    per_caller_count:   Dict[str, int]       = {}
+    global_count:       Dict[str, int]       = {}
     ordered_calls: List[Dict[str, Any]] = []
-    seen_pairs: Set[Tuple[str, str]] = set()
+
     for src_m in sorted_callers:
+        src_t = method_owner.get(src_m, "")
         for c in sorted(calls_by_src.get(src_m, []), key=lambda x: x["order"]):
             dst_m = c["dst"]
             dst_t = method_owner.get(dst_m)
+            # FIX: skip dst methods whose owner is infrastructure noise
             if not dst_t or dst_t not in active_types:
                 continue
             dst_ma = method_attrs.get(dst_m, {})
@@ -629,22 +715,30 @@ def _summarize_activity(
             dst_nm = dst_ma.get("name", "")
             if dst_nm.startswith("_") and not dst_nm.startswith("__"):
                 continue
-            pair = (src_m, dst_m)
-            if pair in seen_pairs:
+
+            key = (src_t, dst_m)
+            if key in per_caller_emitted:
                 continue
-            seen_pairs.add(pair)
+            per_caller_emitted.add(key)
+
+            if per_caller_count.get(src_t, 0) >= MAX_PER_CALLER:
+                continue
+            per_caller_count[src_t] = per_caller_count.get(src_t, 0) + 1
+
+            if global_count.get(dst_m, 0) >= MAX_GLOBAL_REPS:
+                continue
+            global_count[dst_m] = global_count.get(dst_m, 0) + 1
+
             ordered_calls.append({
                 "src_method": src_m,
                 "dst_method": dst_m,
-                "src_type":   method_owner.get(src_m, ""),
+                "src_type":   src_t,
                 "dst_type":   dst_t,
             })
 
     # ── Build context text ─────────────────────────────────────────────────
     lines: List[str] = ["ACTIVITY DIAGRAM CONTEXT", ""]
 
-    # Lane classification
-    lines.append("ARCHITECTURAL COMPONENTS (swimlane classification):")
     sorted_tids = sorted(
         active_types.keys(),
         key=lambda t: _layer_order(
@@ -652,6 +746,8 @@ def _summarize_activity(
             _get(type_info[t], "package", default=""),
         ),
     )
+
+    lines.append("ARCHITECTURAL COMPONENTS (swimlane classification):")
     for tid in sorted_tids:
         nm   = _get(type_info[tid], "name",    default=tid)
         pkg  = _get(type_info[tid], "package", default="(default)")
@@ -698,8 +794,7 @@ def _summarize_activity(
             lines.append(f"  |{lane}|")
 
     else:
-        # Fallback: no CALLS data — emit flat method listing per type
-        lines.append("NO CALL CHAIN DATA AVAILABLE — emit flat method listing per swimlane:")
+        lines.append("NO CALL CHAIN DATA — emit flat method listing per swimlane:")
         lines.append("")
         for tid in sorted_tids:
             nm   = _get(type_info[tid], "name", default=tid)
@@ -728,14 +823,16 @@ def _summarize_activity(
 
     lines.append("")
     lines.append("CRITICAL RULES FOR ACTIVITY DIAGRAM GENERATION:")
-    lines.append("  1. start and stop are required.")
+    lines.append("  1. start and stop are REQUIRED.")
     lines.append("  2. NEVER mix swimlane markers (|Lane|) with if/repeat/fork blocks.")
-    lines.append("     Use swimlanes only when the entire diagram is flat (no structured blocks),")
-    lines.append("     OR use no swimlanes and structured blocks only.")
+    lines.append("     MODE A: swimlanes only, NO if/repeat/fork anywhere.")
+    lines.append("     MODE B: if/repeat/fork only, NO swimlane markers anywhere.")
     lines.append("  3. Action labels must NOT contain < > or | — replace with ( ) and /.")
     lines.append("  4. Use 'ClassName.methodName(params)' format in :action; labels.")
     lines.append("  5. Guards wrap calls annotated [GUARD]; loops wrap calls annotated [LOOP].")
     lines.append("  6. Follow the call chain order above for the diagram flow.")
+    lines.append("  7. Do NOT use 'lane' keyword — it does not exist in PlantUML.")
+    lines.append("  8. Do NOT emit @startuml twice.")
 
     return "\n".join(lines)
 
@@ -745,9 +842,6 @@ def _summarize_activity(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
-    """
-    Converts a CIR dict into a rich, deterministic text context for the LLM.
-    """
     nodes: List[Dict[str, Any]] = cir.get("nodes", []) or []
     edges: List[Dict[str, Any]] = cir.get("edges", []) or []
 
@@ -757,7 +851,6 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
 
     outgoing, incoming = _build_edge_maps(edges)
 
-    # ── 1. Index TypeDecl nodes ───────────────────────────────────────────────
     type_info:  Dict[str, Dict[str, Any]] = {}
     type_names: Dict[str, str]            = {}
 
@@ -776,19 +869,16 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
     is_component_diagram = dt in ("component", "component diagram")
     is_activity_diagram  = dt in ("activity", "activity diagram")
 
-    # ── Package diagram ────────────────────────────────────────────────────────
     if is_package_diagram:
         return _summarize_package(type_info, type_names, edges)
 
-    # ── Component diagram ──────────────────────────────────────────────────────
     if is_component_diagram:
         return _summarize_component(type_info, type_names, edges, outgoing, nodes_by_id)
 
-    # ── Activity diagram ───────────────────────────────────────────────────────
     if is_activity_diagram:
         return _summarize_activity(type_info, type_names, nodes_by_id, edges, outgoing)
 
-    # ── 2. For class diagrams: collect fields and methods per type ────────────
+    # ── Class / Sequence diagrams ─────────────────────────────────────────────
     fields_by_type:  DefaultDict[str, List[str]] = defaultdict(list)
     methods_by_type: DefaultDict[str, List[str]] = defaultdict(list)
 
@@ -806,7 +896,6 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
 
     if is_class_diagram:
         for type_id in type_info:
-            # Fields
             for etype, field_id in outgoing.get(type_id, []):
                 if etype != "HAS_FIELD":
                     continue
@@ -841,7 +930,6 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
                     f"{sym}{mod_prefix}{fname} : {display_type}{mult_suffix}"
                 )
 
-            # Methods
             for etype, method_id in outgoing.get(type_id, []):
                 if etype != "HAS_METHOD":
                     continue
@@ -857,9 +945,7 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
                 is_abstract = _get_bool(mn, "is_abstract")
                 mods        = _get_mods(mn)
 
-                if not mname:
-                    continue
-                if is_ctor:
+                if not mname or is_ctor:
                     continue
 
                 sym = _vis_symbol(vis)
@@ -889,10 +975,9 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
                     f"{sym}{mod_prefix}{mname}({param_sig}) : {ret_display}"
                 )
 
-    MAX_FIELDS   = 15
-    MAX_METHODS  = 18
+    MAX_FIELDS  = 15
+    MAX_METHODS = 18
 
-    # ── 3. Relationship edges between TypeDecl nodes ──────────────────────────
     rels: List[str] = []
     for e in edges:
         src   = _s(e.get("src"))
@@ -904,7 +989,6 @@ def summarize_cir_for_llm(cir: Dict[str, Any], diagram_type: str) -> str:
             continue
         rels.append(f"- {etype}: {type_names[src]} -> {type_names[dst]}")
 
-    # ── 4. Compose the summary ────────────────────────────────────────────────
     lines: List[str] = []
     lines.append("CIR SUMMARY")
     lines.append(f"DIAGRAM_TYPE: {diagram_type}")

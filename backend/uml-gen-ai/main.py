@@ -82,7 +82,7 @@ def uml_ai(req: UMLAIRequest) -> UMLAIResponse:
 
     # 4) Render PlantUML -> SVG
     try:
-        r = requests.post(UML_RENDER_URL, json={"plantuml": plantuml}, timeout=150)
+        r = requests.post(UML_RENDER_URL, json={"plantuml": plantuml}, timeout=200)
         r.raise_for_status()
         svg = (r.json() or {}).get("svg", "")
     except Exception as e:

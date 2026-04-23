@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 # backend/dast-service/start.py
 
-"""
-Startup script for the DAST microservice.
-- Checks Docker availability
-- Pre-pulls sandbox images if Docker is present
-- Starts the FastAPI server on port 7095
-"""
-
 import subprocess
-import sys
 import os
 
 def check_docker():
@@ -24,10 +16,13 @@ def pull_images():
         "python:3.11-alpine",
         "node:18-alpine",
         "golang:1.21-alpine",
+        # FIX: openjdk:17-alpine was REMOVED from Docker Hub (Feb 2024).
+        #      eclipse-temurin:17-jdk-alpine is the official Adoptium replacement —
+        #      same JDK 17, same Alpine base, maintained by Eclipse Foundation.
+        "eclipse-temurin:17-jdk-alpine",
     ]
     print("\n🐳 Pre-pulling sandbox images...")
     for image in images:
-        # Check if already present
         check = subprocess.run(
             ["docker", "image", "inspect", image],
             capture_output=True, timeout=5
@@ -36,14 +31,11 @@ def pull_images():
             print(f"  ✔ Already pulled: {image}")
             continue
         print(f"  ⬇️  Pulling {image}...")
-        result = subprocess.run(
-            ["docker", "pull", image],
-            timeout=300
-        )
+        result = subprocess.run(["docker", "pull", image], timeout=300)
         if result.returncode == 0:
             print(f"  ✔ Pulled: {image}")
         else:
-            print(f"  ⚠️  Failed to pull: {image} (will skip sandbox for this language)")
+            print(f"  ⚠️  Failed to pull: {image} (sandbox for this language will be skipped)")
 
 def main():
     print("=" * 60)
@@ -55,6 +47,12 @@ def main():
 
     if docker_ok:
         pull_images()
+        print("\n📦 Sandbox language support:")
+        print("   ✔ Python      (python:3.11-alpine)")
+        print("   ✔ JavaScript  (node:18-alpine)")
+        print("   ✔ TypeScript  (node:18-alpine)")
+        print("   ✔ Go          (golang:1.21-alpine)")
+        print("   ✔ Java        (eclipse-temurin:17-jdk-alpine)  ← compile + run")
     else:
         print("\n💡 To enable Docker sandbox execution:")
         print("   1. Install Docker Desktop from https://docker.com")
@@ -68,7 +66,7 @@ def main():
         "uvicorn", "main:app",
         "--host", "0.0.0.0",
         "--port", "7095",
-        "--reload"
+        "--reload",
     ])
 
 if __name__ == "__main__":

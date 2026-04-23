@@ -21,6 +21,7 @@ ACTIVITY  — shadowing false, activityBorderColor / BackgroundColor skinparams,
 from __future__ import annotations
 
 import os
+import re
 from typing import Literal
 
 from dotenv import load_dotenv  # type: ignore
@@ -323,74 +324,79 @@ MANDATORY HEADER — copy these lines EXACTLY after @startuml:
   skinparam ActivityDiamondBackgroundColor #ffffff
   skinparam ActivityDiamondFontColor #000000
 
-FLOW CONTROL CONSTRUCTS:
+YOU MUST CHOOSE EXACTLY ONE MODE — never mix them:
 
-1. Basic action node (use ClassName.methodName format):
-   :ServiceName.methodName(param: Type);
+══════════════════════════════════════════════════════
+MODE A — FLAT SWIMLANES (use when flow is purely sequential, NO decisions/loops)
+══════════════════════════════════════════════════════
+  |Controller|
+  :action1;
+  |Service|
+  :action2;
+  |Repository|
+  :action3;
 
-2. Decision diamond (for guard / validation / boolean / Optional return):
-   if (condition?) then (yes)
-     :handle success;
-   else (no)
-     :handle error / return;
-   endif
+Rules for MODE A:
+  - ONLY plain :action; nodes allowed — NO if/repeat/fork anywhere
+  - Lane switches happen between actions, NEVER inside any block
+  - Use this mode when the call chain has no branches or loops
 
-3. Collection loop (for list/array/collection return):
-   repeat
-     :process each item;
-   repeat while (more items?) is (yes) -> no;
+══════════════════════════════════════════════════════
+MODE B — STRUCTURED FLOW (use when flow has decisions, loops, or parallel steps)
+══════════════════════════════════════════════════════
+  start
 
-4. Parallel fork (for independent concurrent steps):
-   fork
-     :step A;
-   fork again
-     :step B;
-   end fork
+  :ClassName.methodName(params);
 
-SWIMLANE MODE (use ONLY when the diagram has NO if/repeat/fork blocks):
-  |ComponentName|
-  :action in this lane;
-  |AnotherComponent|
-  :action in other lane;
+  if (condition?) then (yes)
+    :handle success;
+  else (no)
+    :handle error;
+  endif
 
-NO-SWIMLANE MODE (use when diagram HAS if/repeat/fork structured blocks):
-  Prefix action labels with component name: :ServiceName.method();
-  Do NOT use any |Lane| markers anywhere in this mode.
+  repeat
+    :process item;
+  repeat while (more items?) is (yes) -> no;
 
-PARTICIPANT LANE CLASSIFICATION:
-  Controllers / REST endpoints     → |Controller|
-  Services / Managers / Facades    → |Service|
-  DAOs / Repositories              → |Repository|
-  Database utilities               → |Database|
-  Utility / Helper classes         → |Utility|
-  Other                            → |System|
+  stop
 
-GUARD LABEL CONVENTIONS — keep short and readable:
+Rules for MODE B:
+  - NO swimlane markers (|Lane|) anywhere — not even outside blocks
+  - Prefix ALL action labels with ClassName: :ServiceName.method(params);
+  - Use if/endif for boolean/guard/Optional returns
+  - Use repeat/repeat while for List/Collection returns
+  - start and stop are REQUIRED
+
+ABSOLUTE FORBIDDEN PATTERN (causes PlantUML crash):
+  |ServiceA|              ← swimlane marker
+  if (valid?) then (yes)  ← structured block
+    |ServiceB|            ← CRASH: lane switch inside block
+  endif
+
+GUARD LABEL CONVENTIONS:
   validateInput()    → if (input valid?) then (yes)
   existsByUsername() → if (username exists?) then (yes)
   findById()         → if (record found?) then (yes)
   checkPassword()    → if (password correct?) then (yes)
   isActive()         → if (active?) then (yes)
-  Optional<T> return → if (<entity> found?) then (yes)
+  Optional<T> return → if (entity found?) then (yes)
+
+ACTION LABEL RULES:
+  - Format: :ClassName.methodName(param: Type);
+  - NEVER use < > or | inside labels — replace with ( ) and /
+  - Keep labels concise
 
 ORDERING:
-  1. start at entry point (controller layer).
-  2. Follow the provided call chain from top to bottom.
-  3. Guards/validations come BEFORE the main action they protect.
-  4. Loop nodes wrap collection-returning calls.
+  Follow the provided call chain from top to bottom.
+  Guards/validations come BEFORE the main action they protect.
 
 CRITICAL DO-NOT:
-  1. NEVER mix swimlane markers (|Lane|) with if/repeat/fork blocks in the same diagram.
-     WRONG: |ServiceA|
-            if (valid?) then (yes)
-              |ServiceB|          ← lane switch INSIDE structured block = CRASH
-     RIGHT option A: flat swimlanes with plain :action; nodes only.
-     RIGHT option B: no swimlanes with if/repeat/fork blocks; prefix actions with class name.
-  2. Do NOT use < > or | inside action labels — replace with ( ) and /.
-  3. Do NOT include field declarations or class structure.
-  4. start and stop MUST be present.
-  5. Every if must have endif. Every repeat must have repeat while.
-  6. Do NOT produce an empty or trivial diagram — use ALL calls from the context.
+  1. NEVER mix |Lane| markers with if/repeat/fork in the same diagram.
+  2. Do NOT include field declarations or class structure.
+  3. start and stop MUST be present.
+  4. Every if must have endif. Every repeat must have repeat while.
+  5. Do NOT produce an empty or trivial diagram.
+  6. Do NOT use < > or | inside :action; labels.
 """.strip()
 
 
@@ -514,22 +520,31 @@ Output MUST begin:
   skinparam ActivityDiamondBackgroundColor #ffffff
   skinparam ActivityDiamondFontColor #000000
 
+CHOOSE ONE MODE — NEVER MIX:
+
+MODE A (flat swimlanes, no if/repeat/fork):
+  |Lane|
+  :action;
+  |OtherLane|
+  :other action;
+
+MODE B (structured flow, no swimlanes):
+  start
+  :ClassName.method(params);
+  if (condition?) then (yes)
+    :success action;
+  else (no)
+    :error action;
+  endif
+  stop
+
 ABSOLUTE RULE — NEVER mix swimlane markers with structured blocks:
   WRONG:  |ServiceA|
           if (valid?) then (yes)
             |ServiceB|         ← lane switch INSIDE if = CRASH
           endif
-  CORRECT option A (flat swimlanes, no if/repeat/fork):
-          |ServiceA|
-          :validate input;
-          |ServiceB|
-          :persist entity;
-  CORRECT option B (no swimlanes, with structured blocks):
-          if (valid?) then (yes)
-            :ServiceB.persist(entity);
-          else (no)
-            :return error;
-          endif
+  CORRECT option A: flat swimlanes with ONLY plain :action; nodes.
+  CORRECT option B: no swimlanes + structured blocks, prefix with ClassName.
 
 - start and stop are REQUIRED.
 - Action labels must NOT contain < > or | — use ( ) and /.
@@ -588,16 +603,14 @@ def _inject_after_startuml(plantuml: str, lines_to_inject: list) -> str:
 
 
 def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
-    import re as _re
-
-    if not _re.search(
+    if not re.search(
         r'package\s+"[^"]+"\s*\{[^}]*package\s+"[^"]+"\s*\{',
-        plantuml, _re.DOTALL
+        plantuml, re.DOTALL
     ):
         return plantuml
 
-    start_m = _re.search(r'@startuml\b', plantuml, _re.IGNORECASE)
-    end_m   = _re.search(r'@enduml\b',   plantuml, _re.IGNORECASE)
+    start_m = re.search(r'@startuml\b', plantuml, re.IGNORECASE)
+    end_m   = re.search(r'@enduml\b',   plantuml, re.IGNORECASE)
     if not start_m or not end_m:
         return plantuml
 
@@ -640,7 +653,7 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
             raw = lines[i]
             s   = raw.strip()
 
-            pm = _re.match(
+            pm = re.match(
                 r'^package\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+?))\s*(?:<<[^>]*>>)?\s*\{',
                 s
             )
@@ -650,7 +663,7 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                 open_ct  = s.count("{")
                 close_ct = s.count("}")
                 if open_ct == close_ct and open_ct > 0:
-                    inner_m = _re.search(r'\{(.*)\}', s)
+                    inner_m = re.search(r'\{(.*)\}', s)
                     if inner_m:
                         _parse(inner_m.group(1).strip(), new_pfx)
                     i += 1
@@ -669,14 +682,14 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                 i = j
                 continue
 
-            tm = _re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*$', s)
+            tm = re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*$', s)
             if tm:
                 key = prefix or "(default)"
                 pkg_types.setdefault(key, []).append(f"{tm.group(1)} {tm.group(2)}")
                 i += 1
                 continue
 
-            tbm = _re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*\{', s)
+            tbm = re.match(r'^((?:abstract\s+)?(?:class|interface|enum))\s+(\w+)\s*\{', s)
             if tbm:
                 key = prefix or "(default)"
                 pkg_types.setdefault(key, []).append(f"{tbm.group(1)} {tbm.group(2)}")
@@ -688,7 +701,7 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
                 continue
 
             if s and not s.startswith("'"):
-                if _re.search(r'(-{2,}|\.{2,})[|><!]|[|><!](-{2,}|\.{2,})', s):
+                if re.search(r'(-{2,}|\.{2,})[|><!]|[|><!](-{2,}|\.{2,})', s):
                     arrow_lines.append(s)
             i += 1
 
@@ -736,18 +749,16 @@ def _flatten_package_diagram(plantuml: str, known_fqns: list = None) -> str:
 
 
 def _fix_component_assembly_connectors(plantuml: str) -> str:
-    import re as _re
-
     comp_aliases: dict = {}
     for line in plantuml.splitlines():
-        m = _re.search(r'\[([^\]]+)\]\s+as\s+(\w+)', line)
+        m = re.search(r'\[([^\]]+)\]\s+as\s+(\w+)', line)
         if m:
             comp_aliases[m.group(1)] = m.group(2)
 
     result = []
     for line in plantuml.splitlines():
         result.append(line)
-        m = _re.search(r'\(\)\s+"([^"]+)"\s+as\s+(\w+)', line)
+        m = re.search(r'\(\)\s+"([^"]+)"\s+as\s+(\w+)', line)
         if m:
             name   = m.group(1)
             ialias = m.group(2)
@@ -761,98 +772,271 @@ def _fix_component_assembly_connectors(plantuml: str) -> str:
     return "\n".join(result)
 
 
+# =============================================================================
+#  ACTIVITY DIAGRAM FIX  (complete rewrite — robust against all Gemini mistakes)
+# =============================================================================
+
 def _fix_activity_diagram(plantuml: str) -> str:
     """
-    Post-process activity diagrams to fix common Gemini mistakes:
+    Post-process activity diagrams to guarantee PlantUML renderer compatibility.
 
-    1. Remove swimlane markers that appear inside if/repeat/fork blocks.
-       (These crash the PlantUML renderer.)
-    2. Ensure start/stop are present.
-    3. Escape forbidden characters in action labels (< > →  ← |).
-    4. Balance unclosed if/repeat blocks by appending endif/end.
+    Fixes applied (in order):
+    ──────────────────────────
+    0.  Deduplicate @startuml — Gemini sometimes emits @startuml twice (confirmed
+        in production logs: "@startuml\\n@startuml\\n...").  Keep only the first.
+
+    1.  Strip hallucinated lane/partition syntax that Gemini invents but PlantUML
+        does not support:
+          • lane "Name" as Alias      ← not valid PlantUML
+          • partition "Name" { ... }  ← crashes renderer
+          • ClassName: action;        ← colon-prefix notation (also invalid)
+        All of these are silently removed (lane/partition declarations dropped,
+        colon-prefix lines converted to proper :action; nodes).
+
+    2.  Detect whether the diagram uses structured blocks (if/repeat/fork).
+    2a. If YES  → remove ALL |Lane| swimlane markers unconditionally (MODE B).
+        PlantUML crashes whenever any |Lane| marker appears inside or adjacent
+        to if/repeat/fork regardless of nesting depth.
+    2b. If NO   → keep |Lane| swimlane markers (MODE A — flat lanes only).
+
+    3.  Escape forbidden characters inside :action; labels (< > | -> <-).
+
+    4.  Balance unclosed if/endif, repeat/repeat-while, fork/end-fork blocks.
+
+    5.  Ensure start and stop are present.
+
+    6.  Size guard — clamp body to 250 lines to avoid renderer OOM.
     """
-    import re as _re
+
+    # ── -1. Repair truncated output ───────────────────────────────────────────
+    # Confirmed crash: Gemini hits max_output_tokens mid-line, e.g.:
+    #   ":UserDAO.\n@enduml" -- incomplete :action node with no closing semicolon.
+    # Fix: drop any truncated trailing :action line so the renderer never sees it.
+    plantuml = plantuml.rstrip()
+    if not plantuml.lower().endswith("@enduml"):
+        plantuml = plantuml + "\nstop\n@enduml"
+
+    _pre = plantuml.splitlines()
+    _repaired: list[str] = []
+    for _i, _ln in enumerate(_pre):
+        _is_trunc = (
+            re.match(r'^\s*:[^;]*$', _ln)
+            and not re.match(r'^\s*:[^;]+;\s*$', _ln)
+        )
+        if _is_trunc:
+            _rest = [_l.strip().lower() for _l in _pre[_i + 1:] if _l.strip()]
+            if all(_r in ("stop", "@enduml") for _r in _rest):
+                continue
+        _repaired.append(_ln)
+    plantuml = "\n".join(_repaired)
 
     lines = plantuml.splitlines()
-    result: list = []
 
-    # ── Pass 1: detect if structured blocks exist anywhere ────────────────────
-    has_structured = any(
-        _re.match(r'\s*(if\s*\(|repeat\b|fork\b)', ln, _re.IGNORECASE)
-        for ln in lines
-    )
-
-    # ── Pass 2: remove swimlane markers if structured blocks present ──────────
-    depth = 0          # nesting depth inside if/repeat/fork
-    open_keywords: list = []
-
+    # ── 0. Deduplicate @startuml ──────────────────────────────────────────────
+    # Confirmed crash pattern from logs: "@startuml\n@startuml\n..."
+    # Keep only the FIRST @startuml line; remove any subsequent ones.
+    seen_startuml = False
+    deduped: list[str] = []
     for ln in lines:
-        s = ln.strip().lower()
+        if re.match(r'^\s*@startuml\b', ln, re.IGNORECASE):
+            if not seen_startuml:
+                seen_startuml = True
+                deduped.append(ln)
+            # else: silently drop the duplicate
+        else:
+            deduped.append(ln)
+    lines = deduped
 
-        # Track nesting open
-        if _re.match(r'if\s*\(', s):
-            depth += 1
-            open_keywords.append("if")
-        elif s.startswith("repeat") and not s.startswith("repeat while"):
-            depth += 1
-            open_keywords.append("repeat")
-        elif s.startswith("fork") and not s.startswith("fork again"):
-            depth += 1
-            open_keywords.append("fork")
+    # ── 1. Strip/convert hallucinated syntax ─────────────────────────────────
+    #
+    # Pattern A — `lane "Name" as Alias` or `lane Name`
+    #   Gemini invents this; PlantUML has no `lane` keyword.  Drop the line.
+    #
+    # Pattern B — `partition "Name" {` ... `}`
+    #   partition blocks are only valid in some PlantUML versions and crash
+    #   others.  Convert the opening/closing lines to swimlane markers so the
+    #   diagram stays readable, OR drop them if structured blocks are present
+    #   (handled in step 2 below after detection).
+    #
+    # Pattern C — `ClassName: action text;` or `ClassName: action text`
+    #   Gemini sometimes emits  `Repository: UserDAO.save(user);`
+    #   This is NOT valid PlantUML activity syntax.  Convert to `:action;`.
+    #
+    # Pattern D — `ClassName` on a line by itself (bare type name as a node)
+    #   e.g. `Repository` alone on a line.  Drop it — PlantUML misparses it.
 
-        # Track nesting close
-        elif s in ("endif", "end fork"):
-            depth = max(0, depth - 1)
-            if open_keywords:
-                open_keywords.pop()
-        elif _re.match(r'repeat\s+while\b', s):
-            depth = max(0, depth - 1)
-            if open_keywords:
-                open_keywords.pop()
+    cleaned: list[str] = []
+    for ln in lines:
+        stripped = ln.strip()
 
-        # If we're inside a structured block AND this line is a swimlane marker,
-        # skip it (emit a comment so the diff is visible in debug output)
-        if depth > 0 and has_structured and _re.match(r'\|[^\|]+\|', ln.strip()):
-            result.append(f"' [auto-removed swimlane inside block]: {ln.strip()}")
+        # Pattern A: lane declaration
+        if re.match(r'^\s*lane\s+', ln, re.IGNORECASE):
+            # Convert to a swimlane marker so we don't lose the label entirely
+            m = re.search(r'lane\s+"([^"]+)"', ln, re.IGNORECASE) or \
+                re.search(r'lane\s+(\w+)',      ln, re.IGNORECASE)
+            if m:
+                cleaned.append(f"|{m.group(1)}|")
+            # else drop silently
             continue
 
-        # Escape < and > inside :action; labels
-        if _re.match(r'\s*:[^;]+;', ln):
-            ln = _re.sub(r'<(\w)', r'(\1', ln)
-            ln = _re.sub(r'(\w)>', r'\1)', ln)
-            ln = ln.replace("|", "/")
+        # Pattern B: partition opening — keep as swimlane marker
+        m_part = re.match(r'^\s*partition\s+"([^"]+)"\s*\{?', ln, re.IGNORECASE) or \
+                 re.match(r'^\s*partition\s+(\w+)\s*\{?',     ln, re.IGNORECASE)
+        if m_part:
+            cleaned.append(f"|{m_part.group(1)}|")
+            continue
 
+        # Pattern B: partition closing brace on its own line — drop
+        if re.match(r'^\s*\}\s*$', ln) and any(
+            re.match(r'^\s*partition\b', l, re.IGNORECASE) for l in cleaned
+        ):
+            continue
+
+        # Pattern C: "ClassName: action text;" — convert to :action;
+        m_colon = re.match(r'^\s*(\w+)\s*:\s*([^;{}\n]+?)\s*;?\s*$', ln)
+        if m_colon:
+            keyword = m_colon.group(1).lower()
+            # Make sure this isn't a PlantUML keyword that legitimately uses colon
+            _PLANTUML_KW = {
+                "if", "else", "elseif", "endif", "repeat", "while", "fork",
+                "split", "start", "stop", "end", "note", "skinparam",
+                "actor", "boundary", "control", "database", "participant",
+                "activate", "deactivate", "return", "autonumber", "title",
+                "header", "footer", "loop", "opt", "alt", "group", "ref",
+            }
+            if keyword not in _PLANTUML_KW and re.match(r'^[A-Z]', m_colon.group(1)):
+                # It's a ClassName: action pattern — convert
+                action_text = m_colon.group(2).strip()
+                cleaned.append(f":{action_text};")
+                continue
+
+        # Pattern D: bare ClassName on its own line (PascalCase, no punctuation)
+        if re.match(r'^\s*[A-Z][a-zA-Z0-9]+\s*$', ln):
+            # Drop it — it's a stray type name, not a valid activity node
+            continue
+
+        cleaned.append(ln)
+
+    lines = cleaned
+
+    # ── 2. Detect structured blocks & strip swimlanes if needed ──────────────
+    _STRUCTURED_RE = re.compile(
+        r'^\s*(?:if\s*\(|repeat\s*$|fork\s*$|split\s*$)',
+        re.IGNORECASE,
+    )
+    has_structured = any(_STRUCTURED_RE.match(ln) for ln in lines)
+
+    result: list[str] = []
+    for ln in lines:
+        # Remove |Lane| markers when structured blocks exist
+        if has_structured and re.match(r'^\s*\|[^|]+\|', ln):
+            result.append(f"' [auto-removed swimlane — structured mode]: {ln.strip()}")
+            continue
         result.append(ln)
 
-    # ── Pass 3: ensure start and stop ─────────────────────────────────────────
-    combined = "\n".join(result)
-    if "start" not in combined.lower():
-        # Insert start after the last skinparam line
-        new_result = []
-        inserted = False
-        for ln in result:
-            new_result.append(ln)
-            if not inserted and ln.strip().startswith("skinparam"):
-                # Keep going — insert after the last skinparam block
-                pass
-            if not inserted and ln.strip() and not ln.strip().startswith("skinparam") \
-                    and not ln.strip().startswith("@") and not ln.strip().startswith("'"):
-                new_result.insert(-1, "")
-                new_result.insert(-1, "start")
-                new_result.insert(-1, "")
-                inserted = True
-        result = new_result
+    # ── 3. Escape forbidden characters inside :action; labels ────────────────
+    escaped: list[str] = []
+    for ln in result:
+        if re.match(r'\s*:[^;]+;', ln):
+            ln = re.sub(r'<(\w)', r'(\1', ln)
+            ln = re.sub(r'(\w)>', r'\1)', ln)
+            ln = ln.replace("|", "/")
+            ln = ln.replace("->", "to")
+            ln = ln.replace("<-", "from")
+        escaped.append(ln)
+    result = escaped
 
-    if "stop" not in "\n".join(result).lower():
-        # Insert stop before @enduml
-        new_result = []
-        for ln in result:
-            if ln.strip().lower() == "@enduml":
-                new_result.append("")
-                new_result.append("stop")
-                new_result.append("")
+    # ── 4. Balance unclosed structural keywords ───────────────────────────────
+    combined = "\n".join(result)
+    if_count       = len(re.findall(r'^\s*if\s*\(',        combined, re.MULTILINE | re.IGNORECASE))
+    endif_count    = len(re.findall(r'^\s*endif\b',        combined, re.MULTILINE | re.IGNORECASE))
+    repeat_count   = len(re.findall(r'^\s*repeat\s*$',     combined, re.MULTILINE | re.IGNORECASE))
+    repwhile_count = len(re.findall(r'^\s*repeat\s+while', combined, re.MULTILINE | re.IGNORECASE))
+    fork_count     = len(re.findall(r'^\s*fork\s*$',       combined, re.MULTILINE | re.IGNORECASE))
+    endfork_count  = len(re.findall(r'^\s*end\s+fork\b',   combined, re.MULTILINE | re.IGNORECASE))
+    split_count    = len(re.findall(r'^\s*split\s*$',      combined, re.MULTILINE | re.IGNORECASE))
+    endsplit_count = len(re.findall(r'^\s*end\s+split\b',  combined, re.MULTILINE | re.IGNORECASE))
+
+    closers: list[str] = []
+    for _ in range(max(0, if_count - endif_count)):
+        closers.append("endif")
+    for _ in range(max(0, repeat_count - repwhile_count)):
+        closers.append("repeat while (more items?) is (yes) -> no;")
+    for _ in range(max(0, fork_count - endfork_count)):
+        closers.append("end fork")
+    for _ in range(max(0, split_count - endsplit_count)):
+        closers.append("end split")
+
+    if closers:
+        new_result: list[str] = []
+        inserted = False
+        for ln in reversed(result):
+            if not inserted and re.match(r'^\s*(stop\b|@enduml\b)', ln, re.IGNORECASE):
+                for c in closers:
+                    new_result.append(c)
+                inserted = True
             new_result.append(ln)
-        result = new_result
+        result = list(reversed(new_result))
+
+    # ── 5. Ensure start and stop are present (MODE B only — no swimlanes) ──────
+    # CRITICAL: swimlane diagrams (MODE A) must NOT have start/stop.
+    # Adding start/stop to a swimlane diagram crashes the PlantUML renderer.
+    # Only inject start/stop when the diagram has NO swimlane markers at all.
+    combined = "\n".join(result)
+    has_swimlanes = bool(re.search(r'^\s*\|[^|]+\|', combined, re.MULTILINE))
+
+    if not has_swimlanes:
+        if not re.search(r'^\s*start\b', combined, re.MULTILINE | re.IGNORECASE):
+            new_result = []
+            last_skinparam_idx = -1
+            for i, ln in enumerate(result):
+                if ln.strip().startswith("skinparam") or (ln.strip().startswith("'") and i < 15):
+                    last_skinparam_idx = i
+            for i, ln in enumerate(result):
+                new_result.append(ln)
+                if i == last_skinparam_idx:
+                    new_result.append("")
+                    new_result.append("start")
+                    new_result.append("")
+            result = new_result
+
+        combined = "\n".join(result)
+        if not re.search(r'^\s*stop\b', combined, re.MULTILINE | re.IGNORECASE):
+            new_result = []
+            for ln in result:
+                if re.match(r'^\s*@enduml\b', ln, re.IGNORECASE):
+                    new_result.append("")
+                    new_result.append("stop")
+                    new_result.append("")
+                new_result.append(ln)
+            result = new_result
+    else:
+        # MODE A (swimlanes): remove any start/stop that crept in
+        result = [
+            ln for ln in result
+            if not re.match(r'^\s*(start|stop)\b', ln, re.IGNORECASE)
+        ]
+
+    # ── 6. Size guard — clamp to 250 body lines ───────────────────────────────
+    startuml_idx = -1
+    enduml_idx   = len(result)
+    for i, ln in enumerate(result):
+        if re.match(r'^\s*@startuml\b', ln, re.IGNORECASE) and startuml_idx == -1:
+            startuml_idx = i
+        if re.match(r'^\s*@enduml\b', ln, re.IGNORECASE):
+            enduml_idx = i
+
+    MAX_BODY_LINES = 250
+    header_lines_list = result[:startuml_idx + 1] if startuml_idx >= 0 else []
+    body_lines        = result[startuml_idx + 1:enduml_idx] if startuml_idx >= 0 else result
+    footer_lines      = result[enduml_idx:] if enduml_idx < len(result) else []
+
+    if len(body_lines) > MAX_BODY_LINES:
+        body_lines = body_lines[:MAX_BODY_LINES]
+        if not any(re.match(r'^\s*stop\b', ln, re.IGNORECASE) for ln in body_lines):
+            body_lines.append("")
+            body_lines.append("stop")
+        result = header_lines_list + body_lines + footer_lines
 
     return "\n".join(result)
 
@@ -927,7 +1111,8 @@ def _post_process(plantuml: str, diagram_type: str, known_fqns: list = None) -> 
             needed.append("skinparam shadowing               false")
         if needed:
             plantuml = _inject_after_startuml(plantuml, needed)
-        # Fix swimlane/structured-block conflicts, escape labels, ensure start/stop
+        # ← FULL robust fix: removes all swimlanes if structured blocks exist,
+        #   escapes labels, balances blocks, ensures start/stop, clamps size
         plantuml = _fix_activity_diagram(plantuml)
 
     return plantuml
@@ -938,17 +1123,15 @@ def _post_process(plantuml: str, diagram_type: str, known_fqns: list = None) -> 
 # =============================================================================
 
 def _strip_package_blocks(plantuml: str) -> str:
-    import re as _re
-
     def _remove_wrappers(text: str) -> str:
         result = []
         i = 0
         n = len(text)
         while i < n:
-            m = _re.match(
+            m = re.match(
                 r'^([ \t]*)(package|namespace)([ \t]+(?:"[^"]*"|[^\s{]+))?[ \t]*\{',
                 text[i:],
-                _re.IGNORECASE,
+                re.IGNORECASE,
             )
             if m:
                 start = i + m.end()
@@ -962,7 +1145,7 @@ def _strip_package_blocks(plantuml: str) -> str:
                     j += 1
                 inner = text[start: j - 1]
                 inner_stripped = _remove_wrappers(inner)
-                dedented = _re.sub(r"^  ", "", inner_stripped, flags=_re.MULTILINE)
+                dedented = re.sub(r"^  ", "", inner_stripped, flags=re.MULTILINE)
                 result.append(dedented)
                 i = j
                 if i < n and text[i] == "\n":
@@ -984,8 +1167,6 @@ def _strip_package_blocks(plantuml: str) -> str:
 # =============================================================================
 
 def _extract_plantuml(text: str) -> str:
-    import re as _re
-
     if not text:
         raise RuntimeError("Empty response from Gemini.")
 
@@ -996,10 +1177,10 @@ def _extract_plantuml(text: str) -> str:
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         return text[start_idx: end_idx + len("@enduml")].strip()
 
-    fence_match = _re.search(
+    fence_match = re.search(
         r"```(?:plantuml|uml|puml)?\s*\n(.*?)\n```",
         text,
-        flags=_re.DOTALL | _re.IGNORECASE,
+        flags=re.DOTALL | re.IGNORECASE,
     )
     if fence_match:
         inner = fence_match.group(1).strip()
@@ -1014,16 +1195,15 @@ def _extract_plantuml(text: str) -> str:
 # =============================================================================
 
 def _extract_known_fqns(context: str) -> list:
-    import re as _re
     fqns = set()
 
-    for m in _re.finditer(
+    for m in re.finditer(
         r'package\s+"([a-zA-Z][a-zA-Z0-9._]*\.[a-zA-Z][a-zA-Z0-9._]*)"',
         context
     ):
         fqns.add(m.group(1).strip())
 
-    for m in _re.finditer(
+    for m in re.finditer(
         r'package:\s*([a-zA-Z][a-zA-Z0-9._]*\.[a-zA-Z][a-zA-Z0-9._]*)',
         context
     ):

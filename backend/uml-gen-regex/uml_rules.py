@@ -11,10 +11,6 @@ VISIBILITY_MAP = {
     "package": "~",
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  Architecture layer ordering
-#  Lower number = higher in the call stack (client-side / entry point)
-# ──────────────────────────────────────────────────────────────────────────────
 _LAYER_ORDER: Dict[str, int] = {
     "client":      5,
     "controller":  10,
@@ -51,19 +47,14 @@ _LAYER_ORDER: Dict[str, int] = {
 
 
 def _layer_order(type_name: str, package: str) -> int:
-    """Return architectural layer order for a type. Lower = earlier caller."""
     combined = (type_name + " " + (package or "")).lower()
-    best = 55  # default: middle
+    best = 55
     for keyword, order in _LAYER_ORDER.items():
         if keyword in combined:
             if order < best:
                 best = order
     return best
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Low-level CIR helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 def _index_cir(cir: Dict[str, Any]):
     nodes_by_id: Dict[str, Dict[str, Any]] = {
@@ -132,7 +123,6 @@ def _clean_type_for_display(raw_type: str) -> str:
 
 
 def _clean_type_short(raw_type: str) -> str:
-    """Strip generics entirely, just keep base name."""
     if not raw_type:
         return ""
     t = re.sub(r"<.*?>", "", raw_type)
@@ -168,10 +158,6 @@ def _safe_sequence_label(method_name: str) -> str:
         return f"{safe}()"
     return f"{method_name}()"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Infrastructure-noise filter
-# ──────────────────────────────────────────────────────────────────────────────
 
 _NOISE_NAME_SUFFIXES: Tuple[str, ...] = (
     "exception", "error",
@@ -474,6 +460,9 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
                        and m.get("name", "").lower() not in _TRIVIAL_NAMES]
         return len(non_trivial) == 0
 
+    # ── CHANGE 1: separate model_types and noise_types; only exclude noise ──
+    # model_types are kept as participants (rendered with "entity" keyword).
+    # noise_types (Config, Util, Logger, etc.) are still fully excluded.
     model_types: Set[str] = {t for t in type_attrs if _is_model(t)}
     noise_types: Set[str] = {
         t for t in type_attrs
@@ -482,7 +471,7 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             type_attrs[t].get("package", ""),
         )
     }
-    excluded_types: Set[str] = model_types | noise_types
+    excluded_types: Set[str] = noise_types  # models are NO LONGER excluded
 
     def layer(tid: str) -> int:
         a = type_attrs[tid]
@@ -504,8 +493,9 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             chain.extend(build_chain(hop, visited | {hop}))
         return chain
 
-    non_model    = [t for t in type_attrs if t not in excluded_types]
-    sorted_types = sorted(non_model, key=lambda t: (incoming.get(t, 0), layer(t), type_attrs[t].get("name", "")))
+    # ── CHANGE 2: include all non-noise types (including models) ───────────
+    all_active  = [t for t in type_attrs if t not in excluded_types]
+    sorted_types = sorted(all_active, key=lambda t: (incoming.get(t, 0), layer(t), type_attrs[t].get("name", "")))
 
     covered: Set[str] = set()
     chains:  List[List[str]] = []
@@ -524,21 +514,41 @@ def generate_sequence_diagram(cir: Dict[str, Any]) -> str:
             if tid not in seen:
                 seen.add(tid)
                 ordered.append(tid)
-    for tid in sorted(non_model, key=layer):
+    for tid in sorted(all_active, key=layer):
         if tid not in seen:
             ordered.append(tid)
 
+    # ── CHANGE 3: _participant_keyword — BCE pattern with entity support ────
+    # Priority order matters:
+    #   database  BEFORE  control  (fixes DatabaseManager → cylinder, not arrow)
+    #   entity    AFTER   database (DAOs are database, models are entity)
     def _participant_keyword(tid: str) -> str:
         a   = type_attrs[tid]
         nm  = (a.get("name")    or "").lower()
         pkg = (a.get("package") or "").lower()
         combined = nm + " " + pkg
-        if any(k in combined for k in ("controller", "resource", "endpoint", "rest", "handler", "boundary", "api")):
-            return "boundary"
-        if any(k in combined for k in ("service", "manager", "interactor", "usecase", "business", "facade")):
-            return "control"
-        if any(k in combined for k in ("dao", "repository", "repo", "database", "db", "persistence", "store", "gateway")):
+
+        # 1. DATABASE — must be before "manager"/"service" to catch DatabaseManager
+        if any(k in combined for k in ("dao", "repository", "repo", "database", "db",
+                                        "persistence", "store", "gateway")):
             return "database"
+
+        # 2. BOUNDARY — REST controllers / API handlers
+        if any(k in combined for k in ("controller", "resource", "endpoint", "rest",
+                                        "handler", "boundary", "api")):
+            return "boundary"
+
+        # 3. CONTROL — services, managers, use-cases
+        if any(k in combined for k in ("service", "manager", "interactor", "usecase",
+                                        "business", "facade")):
+            return "control"
+
+        # 4. ENTITY — domain models / DTOs / value objects (BCE pattern)
+        if tid in model_types or any(k in combined for k in ("entity", "model",
+                                                               "domain", "dto",
+                                                               "vo", "bean", "pojo")):
+            return "entity"
+
         return "participant"
 
     entry_controllers: List[str] = []
@@ -983,54 +993,11 @@ def generate_component_diagram(cir: Dict[str, Any]) -> str:
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ACTIVITY DIAGRAM
-#
-#  Shows: method-level control flow derived from CALLS edges (primary source),
-#         with a heuristic fallback when no CALLS data is present.
-#
-#  PlantUML constructs used:
-#    - |Swimlane|                                   (one lane per architectural type)
-#    - start / stop
-#    - :action;                                     (action node)
-#    - if (...) then (yes) / else (no) / endif      (boolean-return guard)
-#    - repeat / repeat while (...)                  (collection-return loop)
-#    - note right / note left                       (parameter hints on decisions)
-#
-#  Message source priority:
-#    1. PRIMARY  — CALLS edges: actual runtime method invocations in call order.
-#    2. FALLBACK — method listing heuristic when no CALLS data exists in CIR.
-#
-#  Does NOT show: fields, inheritance, package structure, interface lollipops.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_activity_diagram(cir: Dict[str, Any]) -> str:
-    """
-    Generate a PlantUML activity diagram from a CIR graph.
-
-    Design decisions for PlantUML compatibility:
-    ─────────────────────────────────────────────
-    PRIMARY path (CALLS edges present):
-      • Uses NO swimlanes. Swimlane switches inside if/repeat blocks crash the
-        PlantUML swimlane renderer, and cross-type call chains almost always
-        cross lane boundaries inside structured blocks.
-      • Instead, action labels are prefixed with the owning type name so the
-        reader can still see which component handles each step.
-      • boolean-return → if/endif decision diamond
-      • collection-return → repeat/repeat while (one-line form, always safe)
-      • Deduplicates (src_method, dst_method) pairs.
-
-    FALLBACK path (no CALLS data):
-      • Uses swimlanes — one per active type. Each type's methods are listed
-        sequentially inside its own lane, so lane boundaries never appear
-        inside a structured block.
-      • Same boolean / collection heuristics applied.
-
-    Exclusions (both paths):
-      • Pure model/POJO types (Student, User) — no behaviour.
-      • Util/service/dao types are KEPT (DatabaseUtil, BCryptUtil are actors).
-    """
     nodes_by_id, edges = _index_cir(cir)
 
-    # ── 1. Index TypeDecl nodes ─────────────────────────────────────────────
     type_attrs: Dict[str, Dict[str, Any]] = {}
     for nid, n in nodes_by_id.items():
         if n.get("kind") == "TypeDecl":
@@ -1039,7 +1006,6 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
     if not type_attrs:
         return "@startuml\nstart\n:No types found in CIR.;\nstop\n@enduml"
 
-    # ── 2. Methods per type + method ownership ──────────────────────────────
     methods_by_type: Dict[str, List[Dict[str, Any]]] = {t: [] for t in type_attrs}
     method_owner: Dict[str, str] = {}
     method_attrs_by_id: Dict[str, Dict[str, Any]] = {}
@@ -1054,7 +1020,6 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
                 method_owner[dst] = src
                 method_attrs_by_id[dst] = ma
 
-    # ── 3. Parameters per method ────────────────────────────────────────────
     params_by_method: Dict[str, List[Dict[str, Any]]] = {}
     for e in edges:
         if e.get("type") == "PARAM_OF":
@@ -1064,7 +1029,6 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
                 if pn and pn.get("kind") == "Parameter":
                     params_by_method.setdefault(mid, []).append(pn.get("attrs", {}))
 
-    # ── 4. CALLS edges ──────────────────────────────────────────────────────
     calls_by_src: Dict[str, List[Dict[str, Any]]] = {}
     for e in edges:
         if e.get("type") != "CALLS":
@@ -1081,7 +1045,6 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
     for src_m in calls_by_src:
         calls_by_src[src_m].sort(key=lambda x: x.get("order", 0))
 
-    # ── 5. Exclusion: pure model/POJO types only ────────────────────────────
     _MODEL_PKG_KW     = {"model", "entity", "domain", "dto", "vo", "bean", "pojo"}
     _BEHAVIOUR_PKG_KW = {"util", "utils", "helper", "helpers", "service", "services",
                          "manager", "managers", "dao", "repository", "config"}
@@ -1109,8 +1072,17 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
                        and m.get("name", "").lower() not in _TRIVIAL_NAMES]
         return len(non_trivial) == 0
 
-    excluded: Set[str] = {t for t in type_attrs if _is_pure_model(t)}
+    excluded: Set[str] = {
+        t for t in type_attrs
+        if _is_pure_model(t) or _is_infrastructure_noise(
+            type_attrs[t].get("name", ""),
+            type_attrs[t].get("package", ""),
+        )
+    }
+
     active_types = {t: a for t, a in type_attrs.items() if t not in excluded}
+    if not active_types:
+        active_types = {t: a for t, a in type_attrs.items() if not _is_pure_model(t)}
     if not active_types:
         active_types = dict(type_attrs)
 
@@ -1122,10 +1094,7 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
         ),
     )
 
-    # ── 6. Format helpers ────────────────────────────────────────────────────
-
     def _safe_label(text: str) -> str:
-        """Escape chars that break PlantUML labels: <, >, |"""
         return text.replace("<", "(").replace(">", ")").replace("|", "/")
 
     def _fmt_action(method_id: str, method_name: str, owner_name: str) -> str:
@@ -1142,37 +1111,83 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
         raw = f"{owner_name}.{method_name}({', '.join(parts)}{suffix})"
         return _safe_label(raw)
 
-    def _is_list_ret(mid: str) -> bool:
+    def _is_loop(mid: str) -> bool:
         ma = method_attrs_by_id.get(mid) or {}
         rt = (ma.get("raw_return_type") or ma.get("return_type") or "").lower()
         return any(k in rt for k in ("list", "collection", "set", "iterable", "[]", "array"))
 
-    def _is_bool_ret(mid: str) -> bool:
-        ma = method_attrs_by_id.get(mid) or {}
-        rt = _clean_type_short(ma.get("raw_return_type") or ma.get("return_type") or "")
-        return rt.lower() in ("boolean", "bool")
+    def _is_guard(mid: str) -> bool:
+        ma    = method_attrs_by_id.get(mid) or {}
+        name  = (ma.get("name") or "").lower()
+        rt    = _clean_type_short(
+                    ma.get("raw_return_type") or ma.get("return_type") or ""
+                ).lower()
+        if rt in ("boolean", "bool"):
+            return True
+        if "optional" in rt:
+            return True
+        _GUARD_PFXS = ("validate", "check", "verify", "ensure", "assert",
+                       "exists", "existsby", "is", "has", "can", "allow")
+        if any(name.startswith(p) for p in _GUARD_PFXS):
+            return True
+        return False
 
-    # ── 7. Gather active call triples, grouped by caller layer ─────────────
-    #
-    # Problem with a flat sort-by-order: every caller method resets `order`
-    # from 0, so calls from AccountService.createAccount (order 0,1,2…) and
-    # AccountService.deposit (order 0,1,2…) interleave arbitrarily when merged
-    # into one list and sorted by order value alone.
-    #
-    # Fix: group callers by their owning type's architectural layer, then sort
-    # each group's calls by their local order.  This gives a coherent top-down
-    # flow: Controller methods first, Service methods next, Repository last.
-    #
-    # Within a type, caller methods are sorted by the first order value of any
-    # call they make (i.e. the method that fires earliest in the file).
+    def _guard_label(dst_mname: str, mid: str) -> str:
+        ma   = method_attrs_by_id.get(mid) or {}
+        name = dst_mname
+        rt   = _clean_type_short(
+                   ma.get("raw_return_type") or ma.get("return_type") or ""
+               ).lower()
+        if "optional" in rt:
+            subject = re.sub(
+                r"^(?:findBy|getBy|loadBy|fetchBy|searchBy|"
+                r"find|get|load|fetch|lookup|query|retrieve)",
+                "", name
+            ).strip()
+            if subject:
+                subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+            else:
+                subject = "result"
+            return f"{subject} found?"
+        nl = name.lower()
+        if nl.startswith("existsby"):
+            subject, suffix = name[len("existsBy"):], " exists?"
+        elif nl.startswith("exists"):
+            subject, suffix = name[len("exists"):], " exists?"
+        elif nl.startswith("validateby"):
+            subject, suffix = name[len("validateBy"):], " valid?"
+        elif nl.startswith("validate"):
+            subject, suffix = name[len("validate"):], " valid?"
+        elif nl.startswith("verifyby"):
+            subject, suffix = name[len("verifyBy"):], " valid?"
+        elif nl.startswith("verify"):
+            subject, suffix = name[len("verify"):], " valid?"
+        elif nl.startswith("checkby"):
+            subject, suffix = name[len("checkBy"):], " correct?"
+        elif nl.startswith("check"):
+            subject, suffix = name[len("check"):], " correct?"
+        elif nl.startswith("ensure"):
+            subject, suffix = name[len("ensure"):], " satisfied?"
+        elif nl.startswith("has"):
+            subject, suffix = name[len("has"):], "?"
+        elif nl.startswith("is"):
+            subject, suffix = name[len("is"):], "?"
+        elif nl.startswith("can"):
+            subject, suffix = name[len("can"):], "?"
+        elif nl.startswith("allow"):
+            subject, suffix = name[len("allow"):], " allowed?"
+        else:
+            subject, suffix = name, "?"
+        if not subject:
+            subject = name
+        subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
+        return f"{subject}{suffix}"
 
-    # Map src_method → (layer, earliest_order) for sorting
     src_layer: Dict[str, Tuple[int, int]] = {}
     for src_m, call_list in calls_by_src.items():
         src_type = method_owner.get(src_m)
         if not src_type or src_type not in active_types:
             continue
-        # Skip private callers — Python _ prefix or CIR visibility=private
         src_attrs = method_attrs_by_id.get(src_m) or {}
         src_nm    = src_attrs.get("name", "")
         src_vis   = src_attrs.get("visibility", "public")
@@ -1180,17 +1195,15 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
             continue
         if src_nm.startswith("_") and not src_nm.startswith("__"):
             continue
-        layer = _layer_order(
+        layer     = _layer_order(
             active_types[src_type].get("name", ""),
             active_types[src_type].get("package", ""),
         )
-        earliest = min((c.get("order", 0) for c in call_list), default=0)
+        earliest  = min((c.get("order", 0) for c in call_list), default=0)
         src_layer[src_m] = (layer, earliest)
 
-    # Sort callers: by layer first, then earliest call order
     sorted_callers = sorted(src_layer.keys(), key=lambda m: src_layer[m])
 
-    # Build ordered flat list: for each caller, append its dst calls in order
     all_calls: List[Tuple[int, str, str]] = []
     for src_m in sorted_callers:
         for call in sorted(calls_by_src[src_m], key=lambda c: c.get("order", 0)):
@@ -1200,167 +1213,57 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
             dst_type = method_owner.get(dst_m)
             if not dst_type or dst_type not in active_types:
                 continue
-            # Skip private destination methods — either by CIR visibility field
-            # or by Python convention (_name prefix means private/internal).
             dst_attrs = method_attrs_by_id.get(dst_m) or {}
             dst_vis   = dst_attrs.get("visibility", "public")
             dst_nm    = dst_attrs.get("name", "")
             if dst_vis == "private":
                 continue
-            # Python: single underscore prefix = private/protected
             if dst_nm.startswith("_") and not dst_nm.startswith("__"):
                 continue
             all_calls.append((src_layer[src_m][0], src_m, dst_m))
 
     use_primary = bool(all_calls)
 
-    # ── 8. Skinparam header (no swimlane params if using primary/no-lane mode)
     out: List[str] = [
         "@startuml",
         "",
         "skinparam shadowing               false",
+        "skinparam activityBorderColor     #000000",
+        "skinparam activityBackgroundColor #ffffff",
+        "skinparam activityFontColor       #000000",
+        "skinparam activityFontSize        13",
+        "skinparam arrowColor              #000000",
+        "skinparam ActivityDiamondBorderColor     #000000",
+        "skinparam ActivityDiamondBackgroundColor #ffffff",
+        "skinparam ActivityDiamondFontColor       #000000",
         "",
         "start",
         "",
     ]
 
     if use_primary:
-        # ── PRIMARY PATH ─────────────────────────────────────────────────────
-        # Emits action nodes with heuristic branching inferred from:
-        #   • method name prefixes  (validate/check/exists/verify → guard)
-        #   • return type           (Optional/boolean → guard, List → loop)
-        #   • call position         (first call in a chain is often a lookup/guard)
-        #
-        # Branching rules (applied per dst method):
-        #   GUARD   — name starts with validate/check/exists/verify/is/has/can/ensure
-        #             OR returns boolean/Optional/bool
-        #             → if (condition) then (yes) … else (no) :handle error; endif
-        #   LOOP    — returns List/Collection/Set/Iterable/array
-        #             → repeat … repeat while (more items?) is (yes) -> no;
-        #   ACTION  — everything else → plain :action; node
-        #
-        # Dedup on dst_m: each called method appears at most once.
+        MAX_PER_CALLER   = 8
+        MAX_GLOBAL_REPS  = 3
 
-        # ── helper classifiers ──────────────────────────────────────────────
-        _GUARD_PFXS = ("validate", "check", "verify", "ensure", "assert",
-                       "exists", "existsby", "is", "has", "can", "allow")
-        _FIND_PFXS  = ("find", "get", "load", "fetch", "lookup", "query",
-                       "retrieve", "read", "search")
-
-        def _is_guard(mid: str) -> bool:
-            """
-            Returns True when the method acts as a decision gate:
-              - name prefix signals validation / existence check
-              - OR returns boolean / Boolean
-              - OR returns Optional (findBy… that may come back empty)
-            """
-            ma    = method_attrs_by_id.get(mid) or {}
-            name  = (ma.get("name") or "").lower()
-            rt    = _clean_type_short(
-                        ma.get("raw_return_type") or ma.get("return_type") or ""
-                    ).lower()
-            # boolean return always a guard
-            if rt in ("boolean", "bool"):
-                return True
-            # Optional return → potential null path
-            if "optional" in rt:
-                return True
-            # Explicit guard prefix
-            if any(name.startswith(p) for p in _GUARD_PFXS):
-                return True
-            return False
-
-        def _is_loop(mid: str) -> bool:
-            ma = method_attrs_by_id.get(mid) or {}
-            rt = (ma.get("raw_return_type") or ma.get("return_type") or "").lower()
-            return any(k in rt for k in
-                       ("list", "collection", "set", "iterable", "[]", "array"))
-
-        def _guard_label(dst_mname: str, mid: str) -> str:
-            """Human-readable condition label for the diamond."""
-            ma   = method_attrs_by_id.get(mid) or {}
-            name = dst_mname  # preserve original casing for regex
-            rt   = _clean_type_short(
-                       ma.get("raw_return_type") or ma.get("return_type") or ""
-                   ).lower()
-
-            if "optional" in rt:
-                # findByUsername → "username found?"
-                # findByAccountNumber → "accountNumber found?"
-                subject = re.sub(
-                    r"^(?:findBy|getBy|loadBy|fetchBy|searchBy|"
-                    r"find|get|load|fetch|lookup|query|retrieve)",
-                    "", name
-                ).strip()
-                if subject:
-                    # split camelCase: AccountNumber → Account Number
-                    subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
-                else:
-                    subject = "result"
-                return f"{subject} found?"
-
-            # boolean methods: existsByUsername → "username exists?"
-            #                  validateInput   → "input valid?"
-            #                  checkPassword   → "password correct?"
-            #                  isActive        → "active?"
-            nl = name.lower()
-            # Determine suffix first, then strip prefix keeping remainder
-            if nl.startswith("existsby"):
-                subject = name[len("existsBy"):]
-                suffix  = " exists?"
-            elif nl.startswith("exists"):
-                subject = name[len("exists"):]
-                suffix  = " exists?"
-            elif nl.startswith("validateby"):
-                subject = name[len("validateBy"):]
-                suffix  = " valid?"
-            elif nl.startswith("validate"):
-                subject = name[len("validate"):]
-                suffix  = " valid?"
-            elif nl.startswith("verifyby"):
-                subject = name[len("verifyBy"):]
-                suffix  = " valid?"
-            elif nl.startswith("verify"):
-                subject = name[len("verify"):]
-                suffix  = " valid?"
-            elif nl.startswith("checkby"):
-                subject = name[len("checkBy"):]
-                suffix  = " correct?"
-            elif nl.startswith("check"):
-                subject = name[len("check"):]
-                suffix  = " correct?"
-            elif nl.startswith("ensure"):
-                subject = name[len("ensure"):]
-                suffix  = " satisfied?"
-            elif nl.startswith("has"):
-                subject = name[len("has"):]
-                suffix  = "?"
-            elif nl.startswith("is"):
-                subject = name[len("is"):]
-                suffix  = "?"
-            elif nl.startswith("can"):
-                subject = name[len("can"):]
-                suffix  = "?"
-            elif nl.startswith("allow"):
-                subject = name[len("allow"):]
-                suffix  = " allowed?"
-            else:
-                subject = name
-                suffix  = "?"
-
-            if not subject:
-                subject = name
-            # camelCase → space-separated lowercase words
-            subject = re.sub(r"([A-Z])", lambda m: " " + m.group(1), subject).strip().lower()
-            return f"{subject}{suffix}"
-
-        # ── emit loop ───────────────────────────────────────────────────────
-        emitted: Set[str] = set()
+        per_caller_emitted: Set[Tuple[str, str]] = set()
+        per_caller_count: Dict[str, int] = {}
+        global_count: Dict[str, int] = {}
 
         for _, src_m, dst_m in all_calls:
-            if dst_m in emitted:
+            src_type = method_owner.get(src_m, "")
+
+            key = (src_type, dst_m)
+            if key in per_caller_emitted:
                 continue
-            emitted.add(dst_m)
+            per_caller_emitted.add(key)
+
+            if per_caller_count.get(src_type, 0) >= MAX_PER_CALLER:
+                continue
+            per_caller_count[src_type] = per_caller_count.get(src_type, 0) + 1
+
+            if global_count.get(dst_m, 0) >= MAX_GLOBAL_REPS:
+                continue
+            global_count[dst_m] = global_count.get(dst_m, 0) + 1
 
             dst_type  = method_owner.get(dst_m, "")
             dst_name  = (type_attrs.get(dst_type) or {}).get("name", dst_type)
@@ -1372,13 +1275,11 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
             action = _fmt_action(dst_m, dst_mname, dst_name)
 
             if _is_loop(dst_m):
-                # Collection return → process-each loop
                 out.append("repeat")
                 out.append(f"  :{action};")
                 out.append("repeat while (more items?) is (yes) -> no;")
 
             elif _is_guard(dst_m):
-                # Guard / validation → decision diamond
                 cond = _safe_label(_guard_label(dst_mname, dst_m))
                 out.append(f"if ({cond}) then (yes)")
                 out.append(f"  :{action};")
@@ -1390,19 +1291,13 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
                 out.append(f":{action};")
 
     else:
-        # ── FALLBACK PATH ────────────────────────────────────────────────────
-        # Swimlanes are safe here because each type's methods stay inside
-        # their own lane — no structured blocks cross lane boundaries.
-        pass  # no extra skinparams needed for fallback swimlane path
-
-        out.append(":Approximate flow - no call chain data available;")
+        out.append(":Approximate flow — no call chain data available;")
         out.append("")
 
         any_emitted = False
         for type_id in sorted_type_ids:
-            type_name = active_types[type_id].get("name", type_id)
-            lane_name = re.sub(r"[^\w ]", "", type_name).strip() or "System"
-
+            type_name    = active_types[type_id].get("name", type_id)
+            lane_name    = re.sub(r"[^\w ]", "", type_name).strip() or "System"
             type_methods = [
                 m for m in methods_by_type.get(type_id, [])
                 if not m.get("is_constructor")
@@ -1421,7 +1316,6 @@ def generate_activity_diagram(cir: Dict[str, Any]) -> str:
                 mname  = m.get("name", "method")
                 mid    = m.get("_id", "")
                 action = _fmt_action(mid, mname, type_name)
-
                 out.append(f":{action};")
 
         if not any_emitted:

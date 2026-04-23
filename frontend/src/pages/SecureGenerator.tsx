@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import UmlViewerModal, { type DiagramType, type AiUmlStore } from "../components/UmlViewerModal.tsx";
-import ChatHistoryPanel, { type HistoryEntry } from "../components/ChatHistoryPanel.tsx";
-import DastPanel, { type DastReport } from "../components/DastPanel.tsx";
+import ChatHistoryPanel, { type HistoryEntry }               from "../components/ChatHistoryPanel.tsx";
+import DastPanel, { type DastReport }                        from "../components/DastPanel.tsx";
+import MultiFileCodeViewer                                    from "../components/MultiFileCodeViewer.tsx";
 import {
   CheckCircle2, MinusCircle, Shield, Sparkles,
-  Copy, Check, Code2, ChevronDown, Zap, BarChart3, Clock, Settings, ArrowLeft,
+  Copy, Check, Code2, ChevronDown, Zap, Clock, ArrowLeft,
   Network, Package, GitBranch, Boxes, Activity, Eye,
 } from "lucide-react";
 
@@ -15,98 +16,98 @@ import {
 ══════════════════════════════════════════════════════════════════════════ */
 
 type Finding = {
-  check_id?: string;
-  severity?: string;
-  message?: string;
-  path?: string;
-  start?: { line?: number };
+  check_id?:  string;
+  severity?:  string;
+  message?:   string;
+  path?:      string;
+  start?:     { line?: number };
   has_autofix?: boolean;
 };
 
 type SemgrepReport = {
-  ok?: boolean;
-  initial_findings?: number;
-  final_findings?: number;
-  autofix_applied?: boolean;
-  fixes_applied?: number;
-  auto_fixable_count?: number;
-  manual_only_count?: number;
-  packs?: string[];
-  languages?: string[];
-  file_count?: number;
+  ok?:                  boolean;
+  initial_findings?:    number;
+  final_findings?:      number;
+  autofix_applied?:     boolean;
+  fixes_applied?:       number;
+  auto_fixable_count?:  number;
+  manual_only_count?:   number;
+  packs?:               string[];
+  languages?:           string[];
+  file_count?:          number;
   categorized_findings?: {
     initially_auto_fixable?: Finding[];
-    initially_manual_only?: Finding[];
-    still_remaining?: Finding[];
-    remaining_needs_llm?: Finding[];
+    initially_manual_only?:  Finding[];
+    still_remaining?:        Finding[];
+    remaining_needs_llm?:    Finding[];
   };
 };
 
 type LlmFixReport = {
-  fixed?: boolean;
-  attempted?: boolean;
+  fixed?:         boolean;
+  attempted?:     boolean;
   issues_before?: number;
-  issues_after?: number;
+  issues_after?:  number;
   fixes_applied?: number;
-  error?: string;
-  reason?: string;
+  error?:         string;
+  reason?:        string;
 };
 
 type UmlValidationEntry = { ok: boolean; errors: string[] };
-type UmlValidationMap = Partial<
+type UmlValidationMap   = Partial<
   Record<"class" | "package" | "sequence" | "component" | "activity", UmlValidationEntry>
 >;
 
 type UmlReport = {
-  ok?: boolean;
-  file_count?: number;
-  error?: string | null;
-  cir?: unknown;
-  class_svg?: string | null;
-  package_svg?: string | null;
-  sequence_svg?: string | null;
-  component_svg?: string | null;
-  activity_svg?: string | null;
-  ai_class_svg?: string | null;
-  ai_package_svg?: string | null;
-  ai_sequence_svg?: string | null;
-  ai_component_svg?: string | null;
-  ai_activity_svg?: string | null;
-  ai_class_plantuml?: string | null;
-  ai_package_plantuml?: string | null;
-  ai_sequence_plantuml?: string | null;
+  ok?:                    boolean;
+  file_count?:            number;
+  error?:                 string | null;
+  cir?:                   unknown;
+  class_svg?:             string | null;
+  package_svg?:           string | null;
+  sequence_svg?:          string | null;
+  component_svg?:         string | null;
+  activity_svg?:          string | null;
+  ai_class_svg?:          string | null;
+  ai_package_svg?:        string | null;
+  ai_sequence_svg?:       string | null;
+  ai_component_svg?:      string | null;
+  ai_activity_svg?:       string | null;
+  ai_class_plantuml?:     string | null;
+  ai_package_plantuml?:   string | null;
+  ai_sequence_plantuml?:  string | null;
   ai_component_plantuml?: string | null;
-  ai_activity_plantuml?: string | null;
-  validation?: UmlValidationMap;
-  ai_validation?: UmlValidationMap;
+  ai_activity_plantuml?:  string | null;
+  validation?:            UmlValidationMap;
+  ai_validation?:         UmlValidationMap;
 };
 
 type Report = {
-  policy_version?: string;
+  policy_version?:           string;
   prompt_after_enhancement?: string;
-  semgrep?: SemgrepReport;
-  llm_fix?: LlmFixReport;
-  dast?: DastReport;           // ← DAST report
-  dast_llm_fix?: LlmFixReport; // ← DAST LLM re-fix
-  uml?: UmlReport;
-  total_fixes_applied?: number;
+  semgrep?:                  SemgrepReport;
+  llm_fix?:                  LlmFixReport;
+  dast?:                     DastReport;
+  dast_llm_fix?:             LlmFixReport;
+  uml?:                      UmlReport;
+  total_fixes_applied?:      number;
   fix_summary?: {
-    initial_issues?: number;
-    semgrep_fixed?: number;
-    llm_fixed?: number;
-    dast_findings?: number;
-    dast_fixed?: number;
-    remaining_issues?: number;
-    dast_remaining?: number;
-    fix_rate_percent?: number;
+    initial_issues?:    number;
+    semgrep_fixed?:     number;
+    llm_fixed?:         number;
+    dast_findings?:     number;
+    dast_fixed?:        number;
+    remaining_issues?:  number;
+    dast_remaining?:    number;
+    fix_rate_percent?:  number;
   };
 };
 
 type ApiResult = {
-  code: string;
+  code:           string;
   original_code?: string;
-  report: Report;
-  decision?: string;
+  report:         Report;
+  decision?:      string;
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -118,10 +119,10 @@ const HISTORY_API = "http://localhost:8000/api/history/save";
 const UML_AI_API  = "http://localhost:7081/uml/ai";
 
 type DiagramMeta = {
-  type: DiagramType;
-  label: string;
+  type:        DiagramType;
+  label:       string;
   description: string;
-  svgKey: keyof UmlReport;
+  svgKey:      keyof UmlReport;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Icon: React.ComponentType<any>;
 };
@@ -191,8 +192,8 @@ async function saveToHistory(prompt: string, result: ApiResult): Promise<void> {
     });
   } catch {
     try {
-      const raw = localStorage.getItem("secure_gen_history");
-      const existing: HistoryEntry[] = raw ? JSON.parse(raw) : [];
+      const raw      = localStorage.getItem("secure_gen_history");
+      const existing = raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
       existing.unshift(entry);
       localStorage.setItem("secure_gen_history", JSON.stringify(existing.slice(0, 50)));
     } catch { /**/ }
@@ -210,6 +211,7 @@ export default function SecureGenerator() {
   const [copied, setCopied]             = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [securityReportOpen, setSecurityReportOpen] = useState(false);
+  const [sastOpen, setSastOpen]         = useState(false);
 
   // UML modal
   const [umlOpen, setUmlOpen]       = useState(false);
@@ -267,8 +269,6 @@ export default function SecureGenerator() {
       ai_activity_svg:  entry.uml.ai_activity_svg,
     } : undefined;
 
-    const restoredAiCache = restoredUml ? buildAiCacheFromReport(restoredUml) : {};
-
     setOut({
       code:          entry.code,
       original_code: entry.original_code,
@@ -279,7 +279,7 @@ export default function SecureGenerator() {
         uml:         restoredUml,
       } as Report,
     });
-    setAiUmlCache(restoredAiCache);
+    setAiUmlCache(restoredUml ? buildAiCacheFromReport(restoredUml) : {});
     setShowOriginal(false);
     setCopied(false);
     setUmlOpen(false);
@@ -310,77 +310,60 @@ export default function SecureGenerator() {
 
   /* ── RENDER ───────────────────────────────────────────────────────────── */
   return (
-    <div style={{ display: "flex", width: "100vw", height: "100vh", background: "#0f172a", overflow: "hidden" }}>
+    <div style={{ display: "flex", width: "100vw", height: "100vh", background: "#1a1328", overflow: "hidden" }}>
 
       {/* ── Sidebar ── */}
       <div style={{
-        width: 60, background: "#1e1b2e", display: "flex", flexDirection: "column",
-        alignItems: "center", padding: "20px 0", gap: 20, borderRight: "1px solid #2d2a3d",
+        width: 60, background: "#120e1f", display: "flex", flexDirection: "column",
+        alignItems: "center", padding: "20px 0", gap: 20, borderRight: "1px solid #2d1f45",
       }}>
         <button
           onClick={() => window.history.back()}
           style={{ width: 40, height: 40, background: "none", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}
         >
-          <ArrowLeft size={22} color="#e2e8f0" strokeWidth={2.5} />
+          <ArrowLeft size={22} color="#ffffff" strokeWidth={2.5} />
         </button>
 
-        <div style={{ width: 40, height: 40, borderRadius: 12, background: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ width: 40, height: 40, borderRadius: 12, background: "#4F0C87", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Zap size={24} color="#fff" />
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 20 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: "#8b5cf6", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-            <Shield size={20} color="#fff" />
-          </div>
-
-          <button
-            onClick={() => setHistoryOpen(true)}
-            title="View generation history"
-            style={{
-              width: 40, height: 40, borderRadius: 10, padding: 0,
-              background: historyOpen ? "rgba(139,92,246,0.15)" : "transparent",
-              border:     historyOpen ? "1px solid #8b5cf6"     : "1px solid transparent",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", transition: "background .2s, border-color .2s",
-            }}
-          >
-            <Clock size={20} color={historyOpen ? "#8b5cf6" : "#94a3b8"} />
-          </button>
-
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: 0.5 }}>
-            <BarChart3 size={20} color="#94a3b8" />
-          </div>
-        </div>
-
-        <div style={{ marginTop: "auto" }}>
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", opacity: 0.5 }}>
-            <Settings size={20} color="#94a3b8" />
-          </div>
-        </div>
+        <button
+          onClick={() => setHistoryOpen(true)}
+          title="View generation history"
+          style={{
+            width: 40, height: 40, borderRadius: 10, padding: 0,
+            background: historyOpen ? "rgba(79,12,135,0.25)" : "transparent",
+            border:     historyOpen ? "1px solid #4F0C87"    : "1px solid transparent",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", transition: "background .2s, border-color .2s",
+          }}
+        >
+          <Clock size={20} color={historyOpen ? "#c084fc" : "#ffffff"} />
+        </button>
       </div>
 
       {/* ── Main ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Header */}
-        <div style={{ padding: "20px 32px", borderBottom: "1px solid #1e293b", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ padding: "20px 32px", borderBottom: "1px solid #2d1f45", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#f1f5f9" }}>
+            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#ffffff" }}>
               Secure Code Generator
             </h1>
-            <p style={{ margin: "4px 0 0", fontSize: 12, color: "#64748b" }}>
+            <p style={{ margin: "4px 0 0", fontSize: 12, color: "#c4b5d6" }}>
               AI-powered code generation with SAST · DAST · UML visualization
             </p>
           </div>
 
-          {/* Pipeline status badges — shown while loading */}
           {loading && (
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               {["SAST", "DAST", "UML"].map((stage) => (
                 <span key={stage} style={{
                   fontSize: 10, padding: "3px 10px", borderRadius: 4, fontWeight: 700,
-                  background: "rgba(139,92,246,0.15)", color: "#a78bfa",
-                  border: "1px solid rgba(139,92,246,0.3)",
+                  background: "rgba(79,12,135,0.3)", color: "#ffffff",
+                  border: "1px solid rgba(79,12,135,0.6)",
                   animation: "pulse 1.5s infinite",
                 }}>
                   {stage}
@@ -401,18 +384,18 @@ export default function SecureGenerator() {
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
 
               {/* Input card */}
-              <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                <label style={{ display: "block", marginBottom: 12, fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+              <div style={{ background: "#231636", borderRadius: 16, padding: 24, border: "1px solid #3d2060" }}>
+                <label style={{ display: "block", marginBottom: 12, fontSize: 11, fontWeight: 600, color: "#c4b5d6", textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   Describe the code you want to generate
                 </label>
                 <textarea
                   rows={6}
-                  style={{ width: "100%", padding: 16, borderRadius: 12, border: "1px solid #2d3548", fontSize: 13, fontFamily: "inherit", resize: "vertical", outline: "none", boxSizing: "border-box", background: "#0f1419", color: "#94a3b8", transition: "border-color 0.2s", lineHeight: 1.6 }}
-                  placeholder="e.g., give javascript code for student management system..."
+                  style={{ width: "100%", padding: 16, borderRadius: 12, border: "1px solid #3d2060", fontSize: 13, fontFamily: "inherit", resize: "vertical", outline: "none", boxSizing: "border-box", background: "#150f24", color: "#ffffff", transition: "border-color 0.2s", lineHeight: 1.6 }}
+                  placeholder="e.g., give java code for student management system..."
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  onFocus={(e) => (e.target.style.borderColor = "#8b5cf6")}
-                  onBlur={(e)  => (e.target.style.borderColor = "#2d3548")}
+                  onFocus={(e) => (e.target.style.borderColor = "#4F0C87")}
+                  onBlur={(e)  => (e.target.style.borderColor = "#3d2060")}
                 />
 
                 <div style={{ marginTop: 20, display: "flex", gap: 12 }}>
@@ -421,10 +404,11 @@ export default function SecureGenerator() {
                     disabled={loading || !prompt.trim()}
                     style={{
                       flex: 1, padding: "14px 24px", borderRadius: 10, border: "none",
-                      background: loading || !prompt.trim() ? "#2d3548" : "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)",
-                      color: "white", fontSize: 14, fontWeight: 600,
+                      background: loading || !prompt.trim() ? "#3d2060" : "#4F0C87",
+                      color: "#ffffff", fontSize: 14, fontWeight: 600,
                       cursor: loading || !prompt.trim() ? "not-allowed" : "pointer",
                       display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                      transition: "background 0.2s",
                     }}
                   >
                     <Sparkles size={18} />
@@ -434,7 +418,7 @@ export default function SecureGenerator() {
                   {out?.code && (
                     <button
                       onClick={copyCode}
-                      style={{ padding: "14px 20px", borderRadius: 10, border: "1px solid #2d3548", background: copied ? "#8b5cf6" : "transparent", color: copied ? "#fff" : "#94a3b8", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                      style={{ padding: "14px 20px", borderRadius: 10, border: "1px solid #3d2060", background: copied ? "#4F0C87" : "transparent", color: "#ffffff", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
                     >
                       {copied ? <Check size={18} /> : <Copy size={18} />}
                     </button>
@@ -444,14 +428,14 @@ export default function SecureGenerator() {
 
               {/* UML diagrams card */}
               {out && (
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-                    <Network size={14} color="#8b5cf6" />
+                <div style={{ background: "#231636", borderRadius: 16, padding: 24, border: "1px solid #3d2060" }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#c4b5d6", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Network size={14} color="#c084fc" />
                     UML Diagrams
                   </div>
 
                   {!uml || uml.error ? (
-                    <div style={{ padding: 16, background: "#0f1419", borderRadius: 8, border: "1px solid #2d3548", color: "#64748b", fontSize: 13, textAlign: "center" }}>
+                    <div style={{ padding: 16, background: "#150f24", borderRadius: 8, border: "1px solid #3d2060", color: "#c4b5d6", fontSize: 13, textAlign: "center" }}>
                       {uml?.error ? `UML generation: ${uml.error}` : "No UML diagrams available (e.g. non-Java/Python code)."}
                     </div>
                   ) : (
@@ -460,16 +444,16 @@ export default function SecureGenerator() {
                         {DIAGRAM_META.map(({ type, label, description, svgKey, Icon }) => {
                           const ready = Boolean(uml[svgKey]);
                           return (
-                            <div key={type} style={{ padding: "12px 14px", background: "#0f1419", borderRadius: 10, border: `1px solid ${ready ? "#8b5cf6" : "#2d3548"}`, display: "flex", alignItems: "center", gap: 12 }}>
-                              <div style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: ready ? "linear-gradient(135deg,rgba(139,92,246,0.25),rgba(99,102,241,0.25))" : "rgba(71,85,105,0.15)", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${ready ? "rgba(139,92,246,0.35)" : "rgba(71,85,105,0.3)"}` }}>
-                                <Icon size={17} color={ready ? "#a78bfa" : "#475569"} />
+                            <div key={type} style={{ padding: "12px 14px", background: "#150f24", borderRadius: 10, border: `1px solid ${ready ? "#4F0C87" : "#3d2060"}`, display: "flex", alignItems: "center", gap: 12 }}>
+                              <div style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0, background: ready ? "rgba(79,12,135,0.3)" : "rgba(61,32,96,0.3)", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${ready ? "rgba(79,12,135,0.5)" : "rgba(61,32,96,0.4)"}` }}>
+                                <Icon size={17} color={ready ? "#c084fc" : "#7a5a9a"} />
                               </div>
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: 12, fontWeight: 600, color: ready ? "#c4b5fd" : "#64748b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
-                                <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>{description}</div>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: ready ? "#ffffff" : "#9a7ab5", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
+                                <div style={{ fontSize: 10, color: "#9a7ab5", marginTop: 2 }}>{description}</div>
                               </div>
                               <div style={{ flexShrink: 0 }}>
-                                {ready ? <CheckCircle2 size={16} color="#8b5cf6" /> : <MinusCircle size={16} color="#334155" />}
+                                {ready ? <CheckCircle2 size={16} color="#c084fc" /> : <MinusCircle size={16} color="#4d3566" />}
                               </div>
                             </div>
                           );
@@ -477,7 +461,7 @@ export default function SecureGenerator() {
                       </div>
                       <button
                         onClick={openViewer}
-                        style={{ width: "100%", padding: "12px 20px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#8b5cf6,#6366f1)", color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                        style={{ width: "100%", padding: "12px 20px", borderRadius: 10, border: "none", background: "#4F0C87", color: "#ffffff", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
                       >
                         <Eye size={17} />
                         Open UML Viewer
@@ -486,74 +470,20 @@ export default function SecureGenerator() {
                   )}
                 </div>
               )}
-
-              {/* SAST Auto-fix results */}
-              {out && fixSummary && (fixSummary.initial_issues ?? 0) > 0 && (
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
-                    <Shield size={14} color="#8b5cf6" />
-                    SAST Auto-Fix Results
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
-                    {[
-                      { label: "Initial Issues", val: fixSummary.initial_issues,  color: "#ef4444" },
-                      { label: "Semgrep Fixed",  val: fixSummary.semgrep_fixed,   color: "#10b981" },
-                      { label: "LLM Fixed",      val: fixSummary.llm_fixed ?? 0,  color: "#3b82f6" },
-                      { label: "Remaining",      val: fixSummary.remaining_issues, color: (fixSummary.remaining_issues ?? 0) === 0 ? "#10b981" : "#f59e0b" },
-                    ].map(({ label, val, color }) => (
-                      <div key={label} style={{ padding: 16, background: "#0f1419", borderRadius: 12, border: "1px solid #2d3548" }}>
-                        <div style={{ fontSize: 10, color: "#64748b", marginBottom: 8, textTransform: "uppercase", fontWeight: 600, letterSpacing: "0.05em" }}>{label}</div>
-                        <div style={{ fontSize: 28, fontWeight: 700, color }}>{val ?? 0}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12 }}>
-                      <span style={{ color: "#64748b" }}>
-                        Fixed {(fixSummary.semgrep_fixed ?? 0) + (fixSummary.llm_fixed ?? 0)}/{fixSummary.initial_issues}
-                      </span>
-                      <span style={{ color: "#10b981", fontWeight: 700 }}>
-                        {fixSummary.fix_rate_percent?.toFixed(0)}%
-                      </span>
-                    </div>
-                    <div style={{ width: "100%", height: 8, background: "#0f1419", borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ width: `${fixSummary.fix_rate_percent ?? 0}%`, height: "100%", background: "#10b981", transition: "width 0.5s ease", borderRadius: 999 }} />
-                    </div>
-                  </div>
-
-                  {(fixSummary.remaining_issues ?? 0) === 0 && (
-                    <div style={{ padding: 12, background: "rgba(16,185,129,0.1)", borderRadius: 8, border: "1px solid rgba(16,185,129,0.3)", display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#10b981", fontWeight: 500 }}>
-                      <CheckCircle2 size={16} />
-                      All {fixSummary.initial_issues} SAST vulnerabilities fixed!
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ════════════════════════
-                  DAST Panel  ← NEW
-              ════════════════════════ */}
-              {out && dast && dast.ok && (
-                <DastPanel dast={dast} />
-              )}
-
             </div>{/* end left column */}
 
             {/* ════════════════════════════════
-                Right Column
+                Right Column — Generated Code
             ════════════════════════════════ */}
             {out && (
               <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+                <div style={{ background: "#231636", borderRadius: 16, padding: 24, border: "1px solid #3d2060" }}>
 
-                {/* Generated Code */}
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
+                  {/* Header row */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
-                      <Code2 size={14} color="#8b5cf6" />
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#c4b5d6", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
+                      <Code2 size={14} color="#c084fc" />
                       Generated Code
-                      {/* Decision badge */}
                       {out.decision && (
                         <span style={{
                           fontSize: 9, padding: "2px 8px", borderRadius: 4, fontWeight: 700,
@@ -561,98 +491,291 @@ export default function SecureGenerator() {
                             ? "rgba(16,185,129,0.15)"
                             : out.decision === "CODE_WITH_DAST_WARNINGS"
                             ? "rgba(245,158,11,0.15)"
-                            : "rgba(99,102,241,0.15)",
+                            : "rgba(79,12,135,0.25)",
                           color: out.decision === "CODE_FIXED"
                             ? "#10b981"
                             : out.decision === "CODE_WITH_DAST_WARNINGS"
                             ? "#f59e0b"
-                            : "#818cf8",
+                            : "#ffffff",
                         }}>
                           {out.decision.replace(/_/g, " ")}
                         </span>
                       )}
                     </div>
+
+                    {/* Show Original / Show Fixed toggle */}
                     {out.original_code && out.original_code !== out.code && (
                       <button
                         onClick={() => setShowOriginal(!showOriginal)}
-                        style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #8b5cf6", background: showOriginal ? "#8b5cf6" : "transparent", color: showOriginal ? "#fff" : "#8b5cf6", fontSize: 11, fontWeight: 600, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.05em" }}
+                        style={{
+                          padding: "6px 12px", borderRadius: 6, border: "1px solid #4F0C87",
+                          background: showOriginal ? "#4F0C87" : "transparent",
+                          color: "#ffffff", fontSize: 11, fontWeight: 600,
+                          cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.05em",
+                        }}
                       >
                         {showOriginal ? "Show Fixed" : "Show Original"}
                       </button>
                     )}
                   </div>
-                  <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 12, lineHeight: 1.7, background: "#0a0f1a", color: "#e2e8f0", padding: 20, borderRadius: 10, overflow: "auto", maxHeight: 500, fontFamily: "'Fira Code','Cascadia Code',monospace" }}>
-                    {showOriginal ? out.original_code : out.code}
-                  </pre>
-                </div>
 
-                {/* Security Report */}
-                <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
-                  <div
-                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
-                    onClick={() => setSecurityReportOpen(!securityReportOpen)}
-                  >
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 8 }}>
-                      <Shield size={14} color="#a855f7" />
-                      Security Report
-                    </div>
-                    <ChevronDown size={16} color="#64748b" style={{ transform: securityReportOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }} />
-                  </div>
+                  {/*
+                    ★ MultiFileCodeViewer — imported from ../components/MultiFileCodeViewer.tsx
+                      Replaces the old single <pre> block.
+                      Parses === FILE: path === separators automatically and renders:
+                        • Collapsible folder tree sidebar
+                        • Per-file code pane with line numbers + syntax highlighting
+                        • "Copy All" toolbar button
+                        • "Connect to Core System" button → modal with integration guide
+                  */}
+                  <MultiFileCodeViewer
+                    code={showOriginal ? (out.original_code ?? out.code) : out.code}
+                    decision={out.decision}
+                  />
 
-                  <div style={{ marginTop: 12, fontSize: 11, color: "#64748b" }}>
-                    Policy: {out.report.policy_version ?? "LLM01-2025-v1"}
-                  </div>
-
-                  {securityReportOpen && (
-                    <>
-                      {/* DAST summary inside report */}
-                      {dast && (
-                        <div style={{ marginTop: 16, padding: 14, background: "#0a0f1a", borderRadius: 8, border: "1px solid #2d3548" }}>
-                          <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-                            <Activity size={12} color="#f59e0b" />
-                            DAST Summary
-                          </div>
-                          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                            {[
-                              { label: "Total",    val: dast.summary?.total,    color: "#94a3b8" },
-                              { label: "Critical", val: dast.summary?.critical, color: "#ef4444" },
-                              { label: "High",     val: dast.summary?.high,     color: "#f97316" },
-                              { label: "Medium",   val: dast.summary?.medium,   color: "#f59e0b" },
-                            ].map(({ label, val, color }) => (
-                              <div key={label} style={{ textAlign: "center" }}>
-                                <div style={{ fontSize: 18, fontWeight: 700, color }}>{val ?? 0}</div>
-                                <div style={{ fontSize: 10, color: "#475569" }}>{label}</div>
-                              </div>
-                            ))}
-                            <div style={{ marginLeft: "auto", fontSize: 11, color: dast.docker_available ? "#10b981" : "#f59e0b", display: "flex", alignItems: "center", gap: 4 }}>
-                              {dast.docker_available ? "🐳 Docker" : "⚡ Pattern"}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#8b5cf6", fontWeight: 500 }}>
-                        <Code2 size={14} />
-                        Enhanced Prompt
-                      </div>
-                      <pre style={{ whiteSpace: "pre-wrap", margin: "12px 0 0 0", fontSize: 11, background: "#0a0f1a", color: "#64748b", padding: 16, borderRadius: 8, maxHeight: 300, overflow: "auto", fontFamily: "monospace", lineHeight: 1.6 }}>
-                        {out.report.prompt_after_enhancement}
-                      </pre>
-                    </>
-                  )}
                 </div>
               </div>
             )}
 
           </div>
+
+          {/* ════════════════════════════════════════════════════════════
+              Security Report — full-width below both columns
+          ════════════════════════════════════════════════════════════ */}
+          {out && (
+            <div style={{ marginTop: 24, maxWidth: 1600 }}>
+              <div style={{ background: "#231636", borderRadius: 16, border: "1px solid #3d2060", overflow: "hidden" }}>
+
+                {/* Collapsible header */}
+                <div
+                  onClick={() => setSecurityReportOpen(!securityReportOpen)}
+                  style={{
+                    padding: "18px 28px", cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    borderBottom: securityReportOpen ? "1px solid #3d2060" : "none",
+                    background: securityReportOpen ? "#1e1030" : "transparent",
+                    transition: "background 0.2s",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(79,12,135,0.3)", border: "1px solid rgba(192,132,252,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Shield size={15} color="#c084fc" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#ffffff", letterSpacing: "0.04em" }}>
+                        Security Report
+                      </div>
+                      <div style={{ fontSize: 11, color: "#9a7ab5", marginTop: 1 }}>
+                        Policy: {out.report.policy_version ?? "LLM01-2025-v1"}
+                        {fixSummary && (
+                          <span style={{ marginLeft: 12 }}>
+                            · SAST{" "}
+                            <span style={{ color: (fixSummary.remaining_issues ?? 0) === 0 ? "#10b981" : "#f59e0b", fontWeight: 600 }}>
+                              {(fixSummary.remaining_issues ?? 0) === 0 ? "✔ clean" : `${fixSummary.remaining_issues} remaining`}
+                            </span>
+                          </span>
+                        )}
+                        {dast && dast.ok && (
+                          <span style={{ marginLeft: 12 }}>
+                            · DAST{" "}
+                            <span style={{ color: (dast.summary?.total ?? 0) === 0 ? "#10b981" : "#f97316", fontWeight: 600 }}>
+                              {(dast.summary?.total ?? 0) === 0 ? "✔ clean" : `${dast.summary?.total} finding(s)`}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {fixSummary && (fixSummary.initial_issues ?? 0) > 0 && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 20, background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)" }}>
+                        <Shield size={11} color="#10b981" />
+                        <span style={{ fontSize: 11, color: "#10b981", fontWeight: 600 }}>
+                          SAST {fixSummary.fix_rate_percent?.toFixed(0)}% fixed
+                        </span>
+                      </div>
+                    )}
+                    {dast && dast.ok && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 12px", borderRadius: 20, background: dast.docker_available ? "rgba(99,102,241,0.12)" : "rgba(245,158,11,0.1)", border: `1px solid ${dast.docker_available ? "rgba(99,102,241,0.3)" : "rgba(245,158,11,0.25)"}` }}>
+                        <span style={{ fontSize: 11, color: dast.docker_available ? "#a5b4fc" : "#f59e0b", fontWeight: 600 }}>
+                          {dast.docker_available ? "🐳 Docker" : "⚡ Pattern"} · {dast.summary?.total ?? 0} finding(s)
+                        </span>
+                      </div>
+                    )}
+                    <ChevronDown
+                      size={16} color="#9a7ab5"
+                      style={{ transform: securityReportOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.25s", marginLeft: 4 }}
+                    />
+                  </div>
+                </div>
+
+                {/* Expanded body */}
+                {securityReportOpen && (
+                  <div style={{ padding: "28px 28px 24px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, alignItems: "start" }}>
+
+                      {/* SAST */}
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#c4b5d6", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 3, height: 14, borderRadius: 2, background: "#c084fc" }} />
+                          SAST Auto-Fix Results
+                        </div>
+
+                        {fixSummary && (fixSummary.initial_issues ?? 0) > 0 ? (
+                          <>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                              {[
+                                { label: "Initial Issues", val: fixSummary.initial_issues,   color: "#ef4444", bg: "rgba(239,68,68,0.08)",   border: "rgba(239,68,68,0.2)"   },
+                                { label: "Semgrep Fixed",  val: fixSummary.semgrep_fixed,    color: "#10b981", bg: "rgba(16,185,129,0.08)",  border: "rgba(16,185,129,0.2)"  },
+                                { label: "LLM Fixed",      val: fixSummary.llm_fixed ?? 0,   color: "#60a5fa", bg: "rgba(96,165,250,0.08)",  border: "rgba(96,165,250,0.2)"  },
+                                { label: "Remaining",      val: fixSummary.remaining_issues,
+                                  color:  (fixSummary.remaining_issues ?? 0) === 0 ? "#10b981" : "#f59e0b",
+                                  bg:     (fixSummary.remaining_issues ?? 0) === 0 ? "rgba(16,185,129,0.08)" : "rgba(245,158,11,0.08)",
+                                  border: (fixSummary.remaining_issues ?? 0) === 0 ? "rgba(16,185,129,0.2)"  : "rgba(245,158,11,0.2)"  },
+                              ].map(({ label, val, color, bg, border }) => (
+                                <div key={label} style={{ padding: "14px 16px", background: bg, borderRadius: 10, border: `1px solid ${border}` }}>
+                                  <div style={{ fontSize: 9, color: "#9a7ab5", marginBottom: 6, textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.06em" }}>{label}</div>
+                                  <div style={{ fontSize: 28, fontWeight: 800, color, lineHeight: 1 }}>{val ?? 0}</div>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div style={{ padding: "12px 14px", background: "#110c1e", borderRadius: 10, border: "1px solid #2d1f45", marginBottom: 10 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 11 }}>
+                                <span style={{ color: "#9a7ab5" }}>
+                                  Fixed {(fixSummary.semgrep_fixed ?? 0) + (fixSummary.llm_fixed ?? 0)} of {fixSummary.initial_issues} issues
+                                </span>
+                                <span style={{ color: "#10b981", fontWeight: 700 }}>
+                                  {fixSummary.fix_rate_percent?.toFixed(0)}%
+                                </span>
+                              </div>
+                              <div style={{ width: "100%", height: 7, background: "#1e1530", borderRadius: 999, overflow: "hidden" }}>
+                                <div style={{ width: `${fixSummary.fix_rate_percent ?? 0}%`, height: "100%", background: "linear-gradient(90deg, #4F0C87, #10b981)", transition: "width 0.6s ease", borderRadius: 999 }} />
+                              </div>
+                            </div>
+
+                            {(fixSummary.remaining_issues ?? 0) === 0 && (
+                              <div style={{ marginBottom: 10, padding: "10px 14px", background: "rgba(16,185,129,0.08)", borderRadius: 8, border: "1px solid rgba(16,185,129,0.25)", display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#10b981", fontWeight: 600 }}>
+                                <CheckCircle2 size={14} />
+                                All {fixSummary.initial_issues} SAST vulnerabilities resolved!
+                              </div>
+                            )}
+
+                            {(() => {
+                              const cat         = out?.report?.semgrep?.categorized_findings;
+                              const allFindings = [
+                                ...(cat?.initially_auto_fixable ?? []),
+                                ...(cat?.initially_manual_only  ?? []),
+                              ];
+                              if (allFindings.length === 0) return null;
+
+                              const SEV_COLOR: Record<string, string> = { CRITICAL: "#ef4444", ERROR: "#ef4444", HIGH: "#f97316", MEDIUM: "#f59e0b", WARNING: "#f59e0b", LOW: "#60a5fa", INFO: "#94a3b8" };
+                              const SEV_BG:    Record<string, string> = { CRITICAL: "rgba(239,68,68,0.1)", ERROR: "rgba(239,68,68,0.1)", HIGH: "rgba(249,115,22,0.1)", MEDIUM: "rgba(245,158,11,0.1)", WARNING: "rgba(245,158,11,0.1)", LOW: "rgba(96,165,250,0.1)", INFO: "rgba(148,163,184,0.1)" };
+
+                              return (
+                                <div>
+                                  <button
+                                    onClick={() => setSastOpen(!sastOpen)}
+                                    style={{
+                                      width: "100%", padding: "10px 14px", borderRadius: 9,
+                                      background: sastOpen ? "#1e1030" : "#110c1e",
+                                      border: `1px solid ${sastOpen ? "#4F0C87" : "#2d1f45"}`,
+                                      color: "#c4b5d6", fontSize: 12, fontWeight: 600,
+                                      cursor: "pointer", display: "flex", alignItems: "center",
+                                      justifyContent: "space-between", transition: "all 0.2s",
+                                    }}
+                                  >
+                                    <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                                      <Shield size={13} color="#c084fc" />
+                                      View {allFindings.length} Detected Vulnerabilit{allFindings.length === 1 ? "y" : "ies"}
+                                    </span>
+                                    <ChevronDown size={14} color="#9a7ab5" style={{ transform: sastOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+                                  </button>
+
+                                  {sastOpen && (
+                                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                                      {allFindings.map((f, i) => {
+                                        const sev   = (f.severity ?? "INFO").toUpperCase();
+                                        const color = SEV_COLOR[sev] ?? "#94a3b8";
+                                        const bg    = SEV_BG[sev]    ?? "rgba(148,163,184,0.1)";
+                                        return (
+                                          <div key={i} style={{ padding: "10px 12px", borderRadius: 8, background: "#0d0818", border: `1px solid ${color}30` }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                                              <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4, color, background: bg, border: `1px solid ${color}40`, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                                                {sev}
+                                              </span>
+                                              <span style={{ fontSize: 10, color: "#6b7a9a", fontFamily: "monospace" }}>
+                                                {f.check_id ?? "unknown"}
+                                              </span>
+                                              {f.has_autofix && (
+                                                <span style={{ marginLeft: "auto", fontSize: 9, color: "#10b981", background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)", padding: "1px 6px", borderRadius: 4, fontWeight: 600 }}>
+                                                  ✔ auto-fixed
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div style={{ fontSize: 11, color: "#c4b5d6", lineHeight: 1.5, marginBottom: f.path ? 5 : 0 }}>
+                                              {f.message ?? "No description"}
+                                            </div>
+                                            {f.path && (
+                                              <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4 }}>
+                                                <Code2 size={10} color={color} />
+                                                <span style={{ fontSize: 10, color, fontFamily: "monospace", fontWeight: 600 }}>
+                                                  {f.path}{f.start?.line ? ` : line ${f.start.line}` : ""}
+                                                </span>
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </>
+                        ) : (
+                          <div style={{ padding: "24px 16px", background: "rgba(16,185,129,0.06)", borderRadius: 10, border: "1px solid rgba(16,185,129,0.2)", textAlign: "center" }}>
+                            <CheckCircle2 size={28} color="#10b981" style={{ marginBottom: 10 }} />
+                            <div style={{ fontSize: 14, color: "#10b981", fontWeight: 700, marginBottom: 4 }}>No SAST Issues Found</div>
+                            <div style={{ fontSize: 11, color: "#9a7ab5", lineHeight: 1.5 }}>
+                              Static analysis completed — no vulnerabilities detected in the generated code.
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* DAST */}
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#c4b5d6", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 3, height: 14, borderRadius: 2, background: "#f59e0b" }} />
+                          Dynamic Analysis (DAST)
+                        </div>
+
+                        {dast && dast.ok ? (
+                          <DastPanel dast={dast} />
+                        ) : (
+                          <div style={{ padding: "20px 16px", background: "#110c1e", borderRadius: 10, border: "1px solid #2d1f45", textAlign: "center" }}>
+                            <div style={{ fontSize: 13, color: "#9a7ab5" }}>DAST results unavailable</div>
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
 
-      {/* ── UML Modal ── */}
+      {/* UML Modal */}
       {uml && !uml.error && (
         <UmlViewerModal
           open={umlOpen}
-          uml={uml}
+          uml={uml as UmlReport}
           tab={umlTab}
           setTab={setUmlTab}
           onClose={() => setUmlOpen(false)}
@@ -664,7 +787,7 @@ export default function SecureGenerator() {
         />
       )}
 
-      {/* ── History Panel ── */}
+      {/* History Panel */}
       <ChatHistoryPanel
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}

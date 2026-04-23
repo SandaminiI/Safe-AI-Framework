@@ -2,13 +2,30 @@
 
 """
 Orchestrates Layer 1 (pattern scan) + Layer 2 (Docker sandbox).
-Called by main.py and also by vibe-secure-gen/stages/dast_client.py
+
+Supported sandbox languages: python, javascript, typescript, go, java
+Java uses eclipse-temurin:17-jdk-alpine: javac (compile) + java (run).
+
+TIMEOUT GUIDE:
+  - eclipse-temurin:17-jdk-alpine first-run = image pull (~30s) + JVM startup (~5s)
+    + javac compile (5-20s depending on file count) = can exceed 45s easily.
+  - Java timeout raised to 90s to safely cover compile + run on first execution.
+  - After the image is cached locally, subsequent runs typically take 10-25s.
+
+NOTE ON LLM FIX:
+  Layer 3 (LLM fix) has been intentionally removed from this service.
+  Reason: pipeline.py Stage 6 already calls fix_with_llm() after receiving
+  the DAST findings. Running it here too causes:
+    - Duplicate LLM fix attempts printing AFTER the pipeline summary
+    - Extra /api/dast-fix POST requests appearing in the terminal after 200 OK
+    - Double LLM API quota usage
+  The fix is now fully delegated to pipeline.py Stage 6.
 """
 
 from __future__ import annotations
 
 import re
-import tempfile
+import time
 from typing import Any, Dict, List
 
 from scanner import run_pattern_scan
@@ -20,40 +37,36 @@ from sandbox import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Simple language + code extractor (no dependency on vibe-secure-gen)
+#  Language detection
 # ─────────────────────────────────────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r"^```([a-zA-Z0-9_+-]*)\s*\n([\s\S]*?)\n```$", re.M)
-
-_EXT_MAP = {
-    ".py":  "python",
-    ".js":  "javascript",
-    ".ts":  "typescript",
-    ".go":  "go",
-    ".java":"java",
-    ".rb":  "ruby",
-    ".php": "php",
-    ".cs":  "csharp",
-}
 
 _LANG_ALIAS = {
     "js": "javascript", "ts": "typescript",
     "py": "python",     "golang": "go",
 }
 
+_SANDBOXABLE = set(SANDBOX_CONFIG.keys())  # python, javascript, typescript, go, java
+
+# Per-language timeouts (seconds).
+_SANDBOX_TIMEOUTS: Dict[str, int] = {
+    "java":       90,   # compile (javac) + JVM startup + run
+    "go":         30,   # go run compiles too
+    "python":     15,
+    "javascript": 15,
+    "typescript": 15,
+}
+
 
 def _strip_fence(blob: str):
-    """Return (fence_lang, inner_code)."""
     m = _FENCE_RE.search(blob.strip())
     if not m:
         return "", blob.strip()
-    lang  = (m.group(1) or "").strip().lower()
-    inner = (m.group(2) or "").strip()
-    return lang, inner
+    return (m.group(1) or "").strip().lower(), (m.group(2) or "").strip()
 
 
 def _detect_lang(fence_lang: str, hint: str) -> List[str]:
-    """Best-effort language detection from fence tag and hint."""
     langs = set()
     for raw in (fence_lang, hint):
         normalized = _LANG_ALIAS.get(raw.lower(), raw.lower())
@@ -68,57 +81,90 @@ def _detect_lang(fence_lang: str, hint: str) -> List[str]:
 
 def run_dast(code_blob: str, language_hint: str = "") -> Dict[str, Any]:
     """
-    Full DAST analysis:
-      1. Pattern scan  (always)
-      2. Docker sandbox (if available + language supported)
+    DAST analysis — two layers only:
+      1. Pattern scan  (always, all languages)
+      2. Docker sandbox (per-language timeout, java=90s)
 
-    Returns complete result dict.
+    Layer 3 (LLM fix) is intentionally skipped here.
+    It is handled by pipeline.py Stage 6 after this service returns its findings.
     """
+    t_total = time.monotonic()
     print("  🔬 DAST: starting analysis...")
 
     fence_lang, raw_inner = _strip_fence(code_blob)
-    langs = _detect_lang(fence_lang, language_hint)
-    print(f"   DAST: languages detected → {langs or ['unknown']}")
+    all_langs = _detect_lang(fence_lang, language_hint)
+    print(f"   DAST: languages detected → {all_langs or ['unknown']}")
 
     # ── Layer 1: pattern scan ──────────────────────────────────────────────
-    pattern_findings = run_pattern_scan(raw_inner)
-    print(f"   DAST: pattern scan → {len(pattern_findings)} finding(s)")
+    t0 = time.monotonic()
+    pattern_findings = run_pattern_scan(code_blob)
+    print(f"   DAST: pattern scan → {len(pattern_findings)} finding(s) in {time.monotonic()-t0:.1f}s")
 
-    # ── Layer 2: Docker sandbox ────────────────────────────────────────────
-    docker_available   = is_docker_available()
-    execution_results: List[Dict[str, Any]] = []
-    runtime_findings:  List[Dict[str, Any]] = []
+    # ── Layer 2: Docker sandbox ─────────────────────────────────────────────
+    docker_available     = is_docker_available()
+    execution_results:   List[Dict[str, Any]] = []
+    runtime_findings:    List[Dict[str, Any]] = []
+    proof_of_executions: List[Dict[str, Any]] = []
 
-    if docker_available:
-        print("  🐳 DAST: Docker available — running sandbox execution...")
-        for lang in langs:
-            if lang in SANDBOX_CONFIG:
-                print(f"     → executing {lang} sandbox...")
-                exec_result = execute_in_sandbox(raw_inner, lang, timeout=15)
-                exec_result["lang"] = lang
-                execution_results.append(exec_result)
+    sandboxable_langs = [l for l in all_langs if l in _SANDBOXABLE]
+    skipped_langs     = [l for l in all_langs if l not in _SANDBOXABLE]
 
-                if not exec_result.get("skipped"):
-                    rt = analyze_sandbox_output(exec_result)
-                    runtime_findings.extend(rt)
-                    print(
-                        f"     → {lang}: exit={exec_result.get('exit_code')} "
-                        f"| runtime findings={len(rt)}"
-                    )
-    else:
+    if skipped_langs:
+        print(f"   DAST: no Docker config for: {skipped_langs} (pattern scan covers these)")
+
+    if docker_available and sandboxable_langs:
+        print(f"  🐳 DAST: Docker available — running sandbox for: {sandboxable_langs}")
+        for lang in sandboxable_langs:
+            sandbox_timeout = _SANDBOX_TIMEOUTS.get(lang, 15)
+            print(f"     → executing {lang} sandbox (timeout={sandbox_timeout}s)...")
+            if lang == "java":
+                print(f"        ℹ️  Java: compile + JVM startup can take 20-60s on first run")
+
+            t0 = time.monotonic()
+            exec_result = execute_in_sandbox(code_blob, lang, timeout=sandbox_timeout)
+            exec_result["lang"] = lang
+            execution_results.append(exec_result)
+
+            proof = exec_result.get("proof_of_execution")
+            if proof:
+                proof_of_executions.append(proof)
+
+            if not exec_result.get("skipped"):
+                rt      = analyze_sandbox_output(exec_result)
+                runtime_findings.extend(rt)
+                elapsed = time.monotonic() - t0
+
+                compile_note = " (compile error)" if exec_result.get("java_compile_error") else ""
+                timeout_note = " ⏰ TIMED OUT" if exec_result.get("timed_out") else ""
+                print(
+                    f"     → {lang}: exit={exec_result.get('exit_code')}"
+                    f"{compile_note}{timeout_note}"
+                    f" | runtime findings={len(rt)} | {elapsed:.1f}s"
+                )
+
+                if exec_result.get("timed_out") and lang == "java":
+                    print(f"        ⚠️  Java timed out after {sandbox_timeout}s.")
+                    print(f"        Possible causes:")
+                    print(f"          1. App is a server (runs forever) — expected for web apps")
+                    print(f"          2. eclipse-temurin image not cached yet (next run will be faster)")
+                    print(f"          3. Code has an infinite loop")
+                    print(f"        Set JAVA_SANDBOX_TIMEOUT env var to increase limit (current={sandbox_timeout}s)")
+
+    elif not docker_available:
         print("  ⚠️  DAST: Docker unavailable — pattern scan only")
+    else:
+        print(f"  ℹ️  DAST: no sandboxable languages in {all_langs} — Docker skipped")
 
     # ── Merge & deduplicate ────────────────────────────────────────────────
-    all_findings   = pattern_findings + runtime_findings
-    seen: set      = set()
+    all_findings = pattern_findings + runtime_findings
+    seen: set    = set()
     unique: List[Dict[str, Any]] = []
     for f in all_findings:
-        key = (f["check_id"], f.get("line") or 0, f.get("source", ""))
+        key = (f["check_id"], f.get("line") or 0, f.get("file", ""), f.get("source", ""))
         if key not in seen:
             seen.add(key)
             unique.append(f)
 
-    # ── Summary ────────────────────────────────────────────────────────────
     sev: Dict[str, int] = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for f in unique:
         s = f.get("severity", "LOW").upper()
@@ -127,25 +173,44 @@ def run_dast(code_blob: str, language_hint: str = "") -> Dict[str, Any]:
     owasp_coverage = sorted({f["owasp"] for f in unique if f.get("owasp")})
 
     print(
-        f"  ✔ DAST complete: {len(unique)} finding(s) — "
+        f"  ✔ DAST scan complete in {time.monotonic()-t_total:.1f}s: "
+        f"{len(unique)} finding(s) — "
         f"CRITICAL={sev['CRITICAL']} HIGH={sev['HIGH']} MEDIUM={sev['MEDIUM']}"
     )
 
+    # ── Layer 3: LLM fix — DELEGATED TO pipeline.py Stage 6 ───────────────
+    # fix_result is returned with attempted=False so the frontend and pipeline
+    # know no fix was attempted here. pipeline.py Stage 6 does the actual fix.
+    fix_result: Dict[str, Any] = {
+        "attempted":     False,
+        "fixed":         False,
+        "fixed_code":    None,
+        "fixes_applied": 0,
+        "unfixable":     unique,   # all findings passed back as unfixable from dast-service's perspective
+        "error":         "Fix delegated to pipeline.py Stage 6",
+    }
+
     return {
-        "ok":                True,
-        "docker_available":  docker_available,
-        "findings":          unique,
-        "pattern_findings":  pattern_findings,
-        "runtime_findings":  runtime_findings,
-        "execution_results": execution_results,
-        "languages":         langs,
+        "ok":                  True,
+        "docker_available":    docker_available,
+        "findings":            unique,
+        "pattern_findings":    pattern_findings,
+        "runtime_findings":    runtime_findings,
+        "execution_results":   execution_results,
+        "proof_of_executions": proof_of_executions,
+        "languages":           all_langs,
+        "sandboxable_langs":   sandboxable_langs,
+        "fix_result":          fix_result,
         "summary": {
-            "total":           len(unique),
-            "critical":        sev["CRITICAL"],
-            "high":            sev["HIGH"],
-            "medium":          sev["MEDIUM"],
-            "low":             sev["LOW"],
-            "docker_executed": docker_available and len(execution_results) > 0,
-            "owasp_coverage":  owasp_coverage,
+            "total":            len(unique),
+            "critical":         sev["CRITICAL"],
+            "high":             sev["HIGH"],
+            "medium":           sev["MEDIUM"],
+            "low":              sev["LOW"],
+            "docker_executed":  docker_available and len(execution_results) > 0,
+            "owasp_coverage":   owasp_coverage,
+            "fix_attempted":    False,
+            "fixes_applied":    0,
+            "unfixable_count":  len(unique),
         },
     }

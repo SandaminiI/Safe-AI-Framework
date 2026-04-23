@@ -257,10 +257,15 @@ def status_dict() -> dict:
         except Exception:
             meta = {}
     # annotate meta with detected kind for the UI
+    # write it back so subsequent calls skip the expensive rglob scan
     if "kind" not in meta:
         k = project_kind()
         if k:
             meta["kind"] = k
+            try:
+                write_meta(meta)
+            except Exception:
+                pass
     return {
         "jar_present": bool(jar),
         "project_present": project_present(),

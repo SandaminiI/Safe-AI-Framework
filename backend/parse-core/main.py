@@ -2,8 +2,8 @@
 FastAPI service that exposes:
   GET  /health
   POST /detect          - language detection
-  POST /parse           - single-file  CIR (java OR python)
-  POST /parse/project   - multi-file   CIR (java OR python)
+  POST /parse           - single-file  CIR (java OR python OR javascript/typescript)
+  POST /parse/project   - multi-file   CIR (java OR python OR javascript/typescript)
 """
 from __future__ import annotations
 
@@ -11,19 +11,20 @@ import os
 import tempfile
 from typing import List, Literal, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException # type: ignore
-from fastapi.middleware.cors import CORSMiddleware # type: ignore
-from pydantic import BaseModel # type: ignore
+from fastapi import FastAPI, HTTPException  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from pydantic import BaseModel  # type: ignore
 
 from adapters.java_adapter import JavaAdapter
 from adapters.python_adapter import PythonAdapter
+from adapters.js_adapter import JSAdapter
 from detect import detect_language
 
 # ---------------------------------------------------------
 # App + CORS
 # ---------------------------------------------------------
 
-app = FastAPI(title="Parser Core Service", version="0.2.0")
+app = FastAPI(title="Parser Core Service", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,10 +38,24 @@ app.add_middleware(
 )
 
 # Pre-instantiate adapters (they are stateless/reusable)
-_java_adapter = JavaAdapter()
+_java_adapter   = JavaAdapter()
 _python_adapter = PythonAdapter()
+_js_adapter     = JSAdapter()
 
-_SUPPORTED_LANGUAGES = {"java", "python"}
+# Languages supported for /parse and /parse/project
+_SUPPORTED_LANGUAGES = {"java", "python", "javascript", "typescript"}
+
+# File-extension → language mapping used by /parse/project
+_EXT_TO_LANG: Dict[str, str] = {
+    ".java": "java",
+    ".py":   "python",
+    ".js":   "javascript",
+    ".jsx":  "javascript",
+    ".ts":   "typescript",
+    ".tsx":  "typescript",
+    ".mjs":  "javascript",
+    ".cjs":  "javascript",
+}
 
 
 def _get_adapter(lang: str):
@@ -49,6 +64,8 @@ def _get_adapter(lang: str):
         return _java_adapter
     if lang == "python":
         return _python_adapter
+    if lang in ("javascript", "typescript"):
+        return _js_adapter
     return None
 
 
@@ -103,7 +120,7 @@ class ParseResponse(BaseModel):
 def parse(req: ParseRequest) -> ParseResponse:
     """
     Parse a single code snippet into CIR.
-    Supports: java, python
+    Supports: java, python, javascript, typescript
     """
     if req.language:
         lang = req.language
@@ -124,7 +141,7 @@ def parse(req: ParseRequest) -> ParseResponse:
     cir = graph.to_debug_json()
 
     return ParseResponse(
-        language=lang, 
+        language=lang,
         file_count=1,
         cir=cir,
     )
@@ -140,7 +157,7 @@ class ProjectFile(BaseModel):
 
 
 class ProjectParseRequest(BaseModel):
-    language: Literal["java", "python"] = "java"
+    language: Literal["java", "python", "javascript", "typescript"] = "java"
     files: List[ProjectFile]
 
 
@@ -156,11 +173,12 @@ def parse_project(req: ProjectParseRequest) -> ProjectParseResponse:
     """
     Accept multiple source files and build ONE merged CIR graph.
 
-    For java:   uses JavaAdapter.build_cir_graph_for_files(...)
-    For python: uses PythonAdapter.build_cir_graph_for_files(...)
+    For java:                  uses JavaAdapter.build_cir_graph_for_files(...)
+    For python:                uses PythonAdapter.build_cir_graph_for_files(...)
+    For javascript/typescript: uses JSAdapter.build_cir_graph_for_files(...)
 
-    Cross-file relationships (e.g. ShoppingCart --> Product) are resolved
-    because all files are parsed together into a shared type namespace.
+    Cross-file relationships are resolved because all files are parsed
+    together into a shared type namespace.
     """
     if req.language not in _SUPPORTED_LANGUAGES:
         raise HTTPException(
@@ -174,15 +192,21 @@ def parse_project(req: ProjectParseRequest) -> ProjectParseResponse:
     adapter = _get_adapter(req.language)
 
     # Determine the file extension for the temp files
-    ext = ".java" if req.language == "java" else ".py"
+    _lang_to_ext: Dict[str, str] = {
+        "java":       ".java",
+        "python":     ".py",
+        "javascript": ".js",
+        "typescript": ".ts",
+    }
+    ext = _lang_to_ext.get(req.language, ".js")
 
     with tempfile.TemporaryDirectory() as td:
         paths: List[str] = []
 
         for f in req.files:
-            # Ensure filename has the right extension
             fname = f.filename
-            if not fname.endswith(ext):
+            # Normalise extension
+            if not any(fname.endswith(e) for e in _EXT_TO_LANG):
                 fname = fname + ext
 
             path = os.path.join(td, fname)

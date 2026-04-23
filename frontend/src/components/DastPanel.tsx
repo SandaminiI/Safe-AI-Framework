@@ -3,7 +3,8 @@
 import { useState } from "react";
 import {
   Activity, AlertTriangle, CheckCircle2, ChevronDown,
-  ChevronRight, Container, Shield, Zap,
+  ChevronRight, Container, Shield, Zap, Terminal,
+  FileCode, Wrench, XCircle, Clock, Cpu, Hash,
 } from "lucide-react";
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
@@ -14,45 +15,83 @@ export type DastFinding = {
   owasp?:    string;
   cwe?:      string | null;
   line?:     number | null;
+  file?:     string | null;          // ← NEW: filename
   snippet?:  string | null;
+  fix_hint?: string | null;          // ← NEW: remediation advice
   source:    "pattern_scan" | "docker_execution";
   runtime:   boolean;
+  proof_of_execution?: ProofOfExecution | null;
+};
+
+export type ProofOfExecution = {   // ← NEW
+  image:        string;
+  image_id?:    string | null;
+  container_id?: string | null;
+  started_at?:  string;
+  elapsed_ms?:  number;
+  exit_code?:   number;
+  timed_out?:   boolean;
+  stdout_lines?: string[];
+  stderr_lines?: string[];
+  entrypoint?:  string;
+  files?:       string[];
+  isolation?: {
+    network:    string;
+    read_only:  boolean;
+    memory:     string;
+    cpus:       string;
+    pids_limit: number;
+    cap_drop:   string;
+  };
+};
+
+export type DastFixResult = {       // ← NEW
+  attempted:     boolean;
+  fixed:         boolean;
+  fixed_code?:   string | null;
+  fixes_applied: number;
+  unfixable?:    DastFinding[];
+  error?:        string | null;
 };
 
 export type DastSummary = {
-  total:           number;
-  critical:        number;
-  high:            number;
-  medium:          number;
-  low:             number;
-  docker_executed: boolean;
-  owasp_coverage:  string[];
+  total:            number;
+  critical:         number;
+  high:             number;
+  medium:           number;
+  low:              number;
+  docker_executed:  boolean;
+  owasp_coverage:   string[];
+  fix_attempted?:   boolean;
+  fixes_applied?:   number;
+  unfixable_count?: number;
 };
 
 export type DastReport = {
-  ok:                boolean;
-  docker_available:  boolean;
-  findings:          DastFinding[];
-  pattern_findings:  DastFinding[];
-  runtime_findings:  DastFinding[];
-  execution_results: Array<{
-    lang:      string;
-    executed?: boolean;
+  ok:                  boolean;
+  docker_available:    boolean;
+  findings:            DastFinding[];
+  pattern_findings:    DastFinding[];
+  runtime_findings:    DastFinding[];
+  execution_results:   Array<{
+    lang:       string;
+    executed?:  boolean;
     exit_code?: number;
     timed_out?: boolean;
-    stdout?:   string;
-    stderr?:   string;
-    skipped?:  boolean;
-    reason?:   string;
-    error?:    string;
+    stdout?:    string;
+    stderr?:    string;
+    skipped?:   boolean;
+    reason?:    string;
+    error?:     string;
+    proof_of_execution?: ProofOfExecution | null;
   }>;
-  languages: string[];
-  summary:   DastSummary;
+  proof_of_executions?: ProofOfExecution[];  // ← NEW
+  languages:  string[];
+  summary:    DastSummary;
+  fix_result?: DastFixResult;                // ← NEW
 };
 
-type Props = {
-  dast: DastReport;
-};
+type Props = { dast: DastReport };
 
 /* ── Severity helpers ────────────────────────────────────────────────────── */
 const SEV_COLOR: Record<string, string> = {
@@ -61,7 +100,6 @@ const SEV_COLOR: Record<string, string> = {
   MEDIUM:   "#f59e0b",
   LOW:      "#3b82f6",
 };
-
 const SEV_BG: Record<string, string> = {
   CRITICAL: "rgba(239,68,68,0.1)",
   HIGH:     "rgba(249,115,22,0.1)",
@@ -78,29 +116,155 @@ function SevBadge({ sev }: { sev: string }) {
       padding: "2px 7px", borderRadius: 4,
       color, background: bg, textTransform: "uppercase",
       border: `1px solid ${color}40`,
+    }}>{sev}</span>
+  );
+}
+
+/* ── Proof of execution card ─────────────────────────────────────────────── */
+function ProofCard({ proof }: { proof: ProofOfExecution }) {
+  const [open, setOpen] = useState(false);
+  const success = !proof.timed_out && (proof.exit_code === 0 || proof.exit_code !== undefined);
+
+  return (
+    <div style={{
+      borderRadius: 8, border: "1px solid rgba(99,102,241,0.35)",
+      background: "#080611", overflow: "hidden", marginBottom: 8,
     }}>
-      {sev}
-    </span>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          padding: "10px 14px", cursor: "pointer", display: "flex",
+          alignItems: "center", gap: 10,
+        }}
+      >
+        <Terminal size={13} color="#6366f1" />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, color: "#a5b4fc", fontWeight: 600 }}>
+            Execution Proof — {proof.image}
+          </div>
+          <div style={{ fontSize: 10, color: "#475569", marginTop: 2, display: "flex", gap: 12 }}>
+            {proof.elapsed_ms !== undefined && (
+              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <Clock size={9} /> {proof.elapsed_ms}ms
+              </span>
+            )}
+            {proof.exit_code !== undefined && (
+              <span style={{ color: proof.exit_code === 0 ? "#10b981" : "#f97316" }}>
+                exit {proof.exit_code}
+              </span>
+            )}
+            {proof.container_id && (
+              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <Hash size={9} /> {proof.container_id}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{
+          fontSize: 10, padding: "2px 8px", borderRadius: 4,
+          background: success ? "rgba(16,185,129,0.12)" : "rgba(245,158,11,0.12)",
+          color: success ? "#10b981" : "#f59e0b", fontWeight: 600,
+        }}>
+          {proof.timed_out ? "timed out" : success ? "✔ ran" : "⚠ error"}
+        </div>
+        <ChevronDown size={12} color="#475569" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+      </div>
+
+      {open && (
+        <div style={{ padding: "0 14px 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Isolation details */}
+          {proof.isolation && (
+            <div style={{
+              display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6,
+            }}>
+              {[
+                { icon: <Cpu size={9} />, label: "CPUs",    val: proof.isolation.cpus },
+                { icon: <Container size={9} />, label: "Memory", val: proof.isolation.memory },
+                { icon: <Shield size={9} />, label: "Network", val: proof.isolation.network },
+              ].map(({ icon, label, val }) => (
+                <div key={label} style={{
+                  padding: "6px 8px", background: "#0a0910", borderRadius: 6,
+                  border: "1px solid #1e1b2e", textAlign: "center",
+                }}>
+                  <div style={{ color: "#6366f1", marginBottom: 2 }}>{icon}</div>
+                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>{val}</div>
+                  <div style={{ fontSize: 9, color: "#475569" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Image ID */}
+          {proof.image_id && (
+            <div style={{ fontSize: 10, color: "#475569", fontFamily: "monospace" }}>
+              <span style={{ color: "#334155" }}>Image digest: </span>
+              <span style={{ color: "#6366f1" }}>{proof.image_id}</span>
+            </div>
+          )}
+
+          {/* Entrypoint */}
+          {proof.entrypoint && (
+            <div style={{ fontSize: 10, color: "#475569" }}>
+              <span style={{ color: "#334155" }}>Entrypoint: </span>
+              <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{proof.entrypoint}</span>
+            </div>
+          )}
+
+          {/* stdout */}
+          {(proof.stdout_lines ?? []).length > 0 && (
+            <div>
+              <div style={{ fontSize: 9, color: "#334155", marginBottom: 4, fontWeight: 600, textTransform: "uppercase" }}>STDOUT</div>
+              <pre style={{
+                margin: 0, fontSize: 10, color: "#64748b", background: "#050409",
+                padding: "6px 10px", borderRadius: 6, fontFamily: "monospace",
+                whiteSpace: "pre-wrap", maxHeight: 80, overflow: "auto",
+                border: "1px solid #1e1b2e",
+              }}>
+                {(proof.stdout_lines ?? []).join("\n") || "(empty)"}
+              </pre>
+            </div>
+          )}
+
+          {/* stderr */}
+          {(proof.stderr_lines ?? []).length > 0 && (
+            <div>
+              <div style={{ fontSize: 9, color: "#334155", marginBottom: 4, fontWeight: 600, textTransform: "uppercase" }}>STDERR</div>
+              <pre style={{
+                margin: 0, fontSize: 10, color: "#f97316", background: "#050409",
+                padding: "6px 10px", borderRadius: 6, fontFamily: "monospace",
+                whiteSpace: "pre-wrap", maxHeight: 80, overflow: "auto",
+                border: "1px solid rgba(249,115,22,0.2)",
+              }}>
+                {(proof.stderr_lines ?? []).join("\n")}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
 /* ── Single finding row ──────────────────────────────────────────────────── */
-function FindingRow({ finding, index }: { finding: DastFinding; index: number }) {
+function FindingRow({
+  finding, index, isUnfixable,
+}: {
+  finding: DastFinding; index: number; isUnfixable?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const color = SEV_COLOR[finding.severity] ?? "#64748b";
 
   return (
     <div style={{
-      borderRadius: 8, border: `1px solid ${color}30`,
-      background: "#0a0910", overflow: "hidden", marginBottom: 8,
+      borderRadius: 8,
+      border: `1px solid ${isUnfixable ? color + "60" : color + "30"}`,
+      background: isUnfixable ? "#0d0008" : "#0a0910",
+      overflow: "hidden", marginBottom: 8,
     }}>
-      {/* header row */}
+      {/* header */}
       <div
         onClick={() => setOpen(!open)}
-        style={{
-          padding: "10px 12px", cursor: "pointer", display: "flex",
-          alignItems: "flex-start", gap: 10,
-        }}
+        style={{ padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 10 }}
       >
         <div style={{
           width: 22, height: 22, borderRadius: 6, flexShrink: 0, marginTop: 1,
@@ -108,7 +272,9 @@ function FindingRow({ finding, index }: { finding: DastFinding; index: number })
           display: "flex", alignItems: "center", justifyContent: "center",
           border: `1px solid ${color}40`,
         }}>
-          <AlertTriangle size={11} color={color} />
+          {isUnfixable
+            ? <XCircle size={11} color={color} />
+            : <AlertTriangle size={11} color={color} />}
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -120,11 +286,33 @@ function FindingRow({ finding, index }: { finding: DastFinding; index: number })
             {finding.source === "docker_execution" && (
               <span style={{
                 fontSize: 9, padding: "1px 6px", borderRadius: 3,
-                background: "rgba(99,102,241,0.15)", color: "#818cf8",
-                fontWeight: 600,
+                background: "rgba(99,102,241,0.15)", color: "#818cf8", fontWeight: 600,
               }}>🐳 runtime</span>
             )}
+            {isUnfixable && (
+              <span style={{
+                fontSize: 9, padding: "1px 6px", borderRadius: 3,
+                background: "rgba(239,68,68,0.15)", color: "#fca5a5", fontWeight: 600,
+              }}>⚠ manual fix required</span>
+            )}
           </div>
+
+          {/* File + line — prominent display */}
+          {(finding.file || finding.line) && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 5,
+              marginTop: 4, padding: "3px 8px", borderRadius: 4,
+              background: `${color}12`, border: `1px solid ${color}25`,
+              width: "fit-content",
+            }}>
+              <FileCode size={10} color={color} />
+              <span style={{ fontSize: 11, color, fontFamily: "monospace", fontWeight: 600 }}>
+                {finding.file ?? "unknown"}
+                {finding.line ? ` : line ${finding.line}` : ""}
+              </span>
+            </div>
+          )}
+
           <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 4, lineHeight: 1.5 }}>
             {finding.message}
           </div>
@@ -150,20 +338,35 @@ function FindingRow({ finding, index }: { finding: DastFinding; index: number })
               <span style={{ color: "#64748b" }}>CWE: </span>{finding.cwe}
             </div>
           )}
-          {finding.line && (
-            <div style={{ fontSize: 11, color: "#94a3b8" }}>
-              <span style={{ color: "#64748b" }}>Line: </span>{finding.line}
+
+          {/* Fix hint — especially useful for unfixable */}
+          {finding.fix_hint && (
+            <div style={{
+              padding: "8px 10px", borderRadius: 6,
+              background: "rgba(16,185,129,0.07)",
+              border: "1px solid rgba(16,185,129,0.2)",
+            }}>
+              <div style={{ fontSize: 9, color: "#10b981", fontWeight: 700, marginBottom: 3, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 4 }}>
+                <Wrench size={9} /> How to Fix
+              </div>
+              <div style={{ fontSize: 11, color: "#6ee7b7", lineHeight: 1.5 }}>
+                {finding.fix_hint}
+              </div>
             </div>
           )}
+
           {finding.snippet && (
-            <pre style={{
-              margin: 0, fontSize: 10, color: "#64748b", background: "#050409",
-              padding: "6px 10px", borderRadius: 6, fontFamily: "monospace",
-              whiteSpace: "pre-wrap", wordBreak: "break-all",
-              border: "1px solid #1e1b2e",
-            }}>
-              {finding.snippet}
-            </pre>
+            <div>
+              <div style={{ fontSize: 9, color: "#334155", marginBottom: 3, fontWeight: 600, textTransform: "uppercase" }}>Matched snippet</div>
+              <pre style={{
+                margin: 0, fontSize: 10, color: "#64748b", background: "#050409",
+                padding: "6px 10px", borderRadius: 6, fontFamily: "monospace",
+                whiteSpace: "pre-wrap", wordBreak: "break-all",
+                border: "1px solid #1e1b2e",
+              }}>
+                {finding.snippet}
+              </pre>
+            </div>
           )}
         </div>
       )}
@@ -171,9 +374,8 @@ function FindingRow({ finding, index }: { finding: DastFinding; index: number })
   );
 }
 
-/* ── OWASP coverage chip ─────────────────────────────────────────────────── */
+/* ── OWASP chip ──────────────────────────────────────────────────────────── */
 function OwaspChip({ label }: { label: string }) {
-  // Extract category letter e.g. "A10" from "A10 - SSRF"
   const match = label.match(/^(A\d+)/);
   const tag   = match ? match[1] : label.slice(0, 3);
   return (
@@ -181,72 +383,44 @@ function OwaspChip({ label }: { label: string }) {
       fontSize: 10, padding: "3px 9px", borderRadius: 5, fontWeight: 700,
       background: "rgba(239,68,68,0.1)", color: "#fca5a5",
       border: "1px solid rgba(239,68,68,0.2)",
-    }}>
-      {tag}
-    </span>
+    }}>{tag}</span>
   );
 }
 
 /* ── Docker execution result row ─────────────────────────────────────────── */
-function ExecRow({ exec }: { exec: Props["dast"]["execution_results"][0] }) {
+function ExecRow({ exec }: { exec: DastReport["execution_results"][0] }) {
   const [open, setOpen] = useState(false);
+  const proof = exec.proof_of_execution;
 
   const statusColor = exec.skipped
-    ? "#64748b"
-    : exec.timed_out
-    ? "#f59e0b"
-    : exec.exit_code === 0
-    ? "#10b981"
-    : "#ef4444";
+    ? "#64748b" : exec.timed_out ? "#f59e0b"
+    : exec.exit_code === 0 ? "#10b981" : "#ef4444";
 
-  const statusLabel = exec.skipped
-    ? "skipped"
-    : exec.timed_out
-    ? "timed out"
-    : exec.executed
-    ? `exit ${exec.exit_code}`
-    : "failed";
+  const statusLabel = exec.skipped ? "skipped"
+    : exec.timed_out ? "timed out"
+    : exec.executed ? `exit ${exec.exit_code}` : "failed";
 
   return (
-    <div style={{
-      borderRadius: 7, border: "1px solid #1e1b2e",
-      background: "#050409", marginBottom: 6, overflow: "hidden",
-    }}>
+    <div style={{ borderRadius: 7, border: "1px solid #1e1b2e", background: "#050409", marginBottom: 6, overflow: "hidden" }}>
       <div
         onClick={() => setOpen(!open)}
-        style={{
-          padding: "8px 12px", display: "flex", alignItems: "center",
-          gap: 8, cursor: "pointer",
-        }}
+        style={{ padding: "8px 12px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
       >
         <Container size={12} color="#6366f1" />
-        <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 600, flex: 1 }}>
-          {exec.lang}
-        </span>
+        <span style={{ fontSize: 12, color: "#94a3b8", fontWeight: 600, flex: 1 }}>{exec.lang}</span>
+        {proof?.elapsed_ms !== undefined && (
+          <span style={{ fontSize: 10, color: "#475569" }}>{proof.elapsed_ms}ms</span>
+        )}
         <span style={{
           fontSize: 10, color: statusColor, fontWeight: 600,
           padding: "2px 7px", borderRadius: 4, background: `${statusColor}18`,
-        }}>
-          {statusLabel}
-        </span>
-        <ChevronDown
-          size={12} color="#475569"
-          style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}
-        />
+        }}>{statusLabel}</span>
+        <ChevronDown size={12} color="#475569" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
       </div>
 
-      {open && (exec.stdout || exec.stderr || exec.reason || exec.error) && (
+      {open && (
         <div style={{ padding: "0 12px 10px 12px" }}>
-          {(exec.stdout || exec.stderr) && (
-            <pre style={{
-              margin: 0, fontSize: 10, color: "#64748b", background: "#0a0910",
-              padding: "8px 10px", borderRadius: 6, fontFamily: "monospace",
-              whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto",
-              border: "1px solid #1e1b2e",
-            }}>
-              {(exec.stdout || "") + (exec.stderr || "")}
-            </pre>
-          )}
+          {proof && <ProofCard proof={proof} />}
           {(exec.reason || exec.error) && (
             <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
               {exec.reason ?? exec.error}
@@ -258,21 +432,67 @@ function ExecRow({ exec }: { exec: Props["dast"]["execution_results"][0] }) {
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════════ */
-/*  Main DastPanel component                                                  */
-/* ══════════════════════════════════════════════════════════════════════════ */
-export default function DastPanel({ dast }: Props) {
-  const [findingsOpen, setFindingsOpen] = useState(true);
-  const [execOpen,     setExecOpen]     = useState(false);
+/* ── Fix result banner ───────────────────────────────────────────────────── */
+function FixBanner({ fix }: { fix: DastFixResult }) {
+  if (!fix.attempted && !fix.fixes_applied) return null;
 
-  const { summary, findings, execution_results } = dast;
-  const noIssues = summary.total === 0;
+  const success = fix.fixed && fix.fixes_applied > 0;
+  const color   = success ? "#10b981" : "#f59e0b";
 
   return (
     <div style={{
-      background: "#1a1f2e", borderRadius: 16, padding: 24,
-      border: "1px solid #2d3548",
+      padding: "10px 14px", borderRadius: 8, marginBottom: 14,
+      background: success ? "rgba(16,185,129,0.08)" : "rgba(245,158,11,0.08)",
+      border: `1px solid ${color}40`,
+      display: "flex", alignItems: "center", gap: 8,
     }}>
+      {success
+        ? <CheckCircle2 size={16} color={color} />
+        : <Wrench size={16} color={color} />}
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, color, fontWeight: 600 }}>
+          {success
+            ? `LLM auto-fixed ${fix.fixes_applied} finding(s)`
+            : fix.attempted
+            ? "LLM fix attempted — some issues require manual remediation"
+            : "LLM fix not attempted — see unfixable findings below"}
+        </div>
+        {fix.error && (
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{fix.error}</div>
+        )}
+      </div>
+      {(fix.unfixable ?? []).length > 0 && (
+        <span style={{
+          fontSize: 10, padding: "2px 8px", borderRadius: 4, fontWeight: 700,
+          background: "rgba(239,68,68,0.15)", color: "#fca5a5",
+        }}>
+          {fix.unfixable!.length} unfixable
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+export default function DastPanel({ dast }: Props) {
+  const [findingsOpen,   setFindingsOpen]   = useState(true);
+  const [unfixableOpen,  setUnfixableOpen]  = useState(true);
+  const [execOpen,       setExecOpen]       = useState(false);
+  const [proofOpen,      setProofOpen]      = useState(false);
+
+  const { summary, findings, execution_results } = dast;
+  const fixResult     = dast.fix_result;
+  const unfixable     = fixResult?.unfixable ?? [];
+  const proofList     = dast.proof_of_executions ?? [];
+  const noIssues      = summary.total === 0;
+
+  // Separate normal findings from unfixable for display
+  const unfixableIds  = new Set(unfixable.map(f => f.check_id + (f.line ?? "")));
+  const fixableShown  = findings.filter(f => !unfixableIds.has(f.check_id + (f.line ?? "")));
+
+  return (
+    <div style={{ background: "#1a1f2e", borderRadius: 16, padding: 24, border: "1px solid #2d3548" }}>
+
       {/* ── Header ── */}
       <div style={{
         fontSize: 11, fontWeight: 600, color: "#64748b",
@@ -281,8 +501,6 @@ export default function DastPanel({ dast }: Props) {
       }}>
         <Activity size={14} color="#f59e0b" />
         Dynamic Analysis (DAST)
-
-        {/* Docker badge */}
         <span style={{
           marginLeft: "auto", fontSize: 10, padding: "2px 9px",
           borderRadius: 4, fontWeight: 600,
@@ -296,32 +514,24 @@ export default function DastPanel({ dast }: Props) {
       </div>
 
       {/* ── Severity counters ── */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr",
-        gap: 8, marginBottom: 16,
-      }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
         {(["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const).map((sev) => {
           const val   = summary[sev.toLowerCase() as keyof DastSummary] as number;
           const color = SEV_COLOR[sev];
-          const bg    = SEV_BG[sev];
           return (
             <div key={sev} style={{
               padding: "10px 8px", background: "#0f1419",
               borderRadius: 10, border: `1px solid ${val > 0 ? color + "40" : "#2d3548"}`,
               textAlign: "center",
             }}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: val > 0 ? color : "#334155" }}>
-                {val}
-              </div>
-              <div style={{ fontSize: 9, color: "#475569", marginTop: 3, fontWeight: 600, letterSpacing: "0.04em" }}>
-                {sev}
-              </div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: val > 0 ? color : "#334155" }}>{val}</div>
+              <div style={{ fontSize: 9, color: "#475569", marginTop: 3, fontWeight: 600, letterSpacing: "0.04em" }}>{sev}</div>
             </div>
           );
         })}
       </div>
 
-      {/* ── Clean state ── */}
+      {/* ── Clean ── */}
       {noIssues && (
         <div style={{
           padding: 14, background: "rgba(16,185,129,0.08)",
@@ -334,49 +544,98 @@ export default function DastPanel({ dast }: Props) {
         </div>
       )}
 
-      {/* ── OWASP coverage chips ── */}
+      {/* ── LLM fix banner ── */}
+      {fixResult && <FixBanner fix={fixResult} />}
+
+      {/* ── OWASP coverage ── */}
       {summary.owasp_coverage.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{
-            fontSize: 10, color: "#475569", fontWeight: 600,
-            textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6,
-          }}>
+          <div style={{ fontSize: 10, color: "#475569", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
             OWASP Risks Detected
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {summary.owasp_coverage.map((o) => (
-              <OwaspChip key={o} label={o} />
-            ))}
+            {summary.owasp_coverage.map((o) => <OwaspChip key={o} label={o} />)}
           </div>
         </div>
       )}
 
-      {/* ── Findings list ── */}
-      {findings.length > 0 && (
+      {/* ── Unfixable findings (most prominent) ── */}
+      {unfixable.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div
+            onClick={() => setUnfixableOpen(!unfixableOpen)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              cursor: "pointer", marginBottom: 10,
+              padding: "8px 10px", borderRadius: 7,
+              background: "rgba(239,68,68,0.07)",
+              border: "1px solid rgba(239,68,68,0.3)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <XCircle size={12} color="#ef4444" />
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#fca5a5" }}>
+                Unfixable — Manual Review Required ({unfixable.length})
+              </span>
+            </div>
+            <ChevronDown size={13} color="#ef4444" style={{ transform: unfixableOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+          </div>
+
+          {unfixableOpen && unfixable.map((f, i) => (
+            <FindingRow key={`uf-${f.check_id}-${i}`} finding={f} index={i} isUnfixable />
+          ))}
+        </div>
+      )}
+
+      {/* ── Regular findings ── */}
+      {fixableShown.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div
             onClick={() => setFindingsOpen(!findingsOpen)}
             style={{
               display: "flex", alignItems: "center", justifyContent: "space-between",
               cursor: "pointer", marginBottom: 10,
-              padding: "8px 10px", borderRadius: 7, background: "#0f1419",
-              border: "1px solid #2d3548",
+              padding: "8px 10px", borderRadius: 7, background: "#0f1419", border: "1px solid #2d3548",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <Shield size={12} color="#f97316" />
               <span style={{ fontSize: 11, fontWeight: 600, color: "#94a3b8" }}>
-                Findings ({findings.length})
+                All Findings ({findings.length})
               </span>
             </div>
-            <ChevronDown
-              size={13} color="#475569"
-              style={{ transform: findingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }}
-            />
+            <ChevronDown size={13} color="#475569" style={{ transform: findingsOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
           </div>
 
           {findingsOpen && findings.map((f, i) => (
-            <FindingRow key={`${f.check_id}-${i}`} finding={f} index={i} />
+            <FindingRow key={`f-${f.check_id}-${i}`} finding={f} index={i} />
+          ))}
+        </div>
+      )}
+
+      {/* ── Proof of Execution (top-level proofs) ── */}
+      {proofList.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div
+            onClick={() => setProofOpen(!proofOpen)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              cursor: "pointer", marginBottom: 8,
+              padding: "8px 10px", borderRadius: 7,
+              background: "rgba(99,102,241,0.07)", border: "1px solid rgba(99,102,241,0.25)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <Terminal size={12} color="#6366f1" />
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#a5b4fc" }}>
+                Execution Proof ({proofList.length} container{proofList.length !== 1 ? "s" : ""})
+              </span>
+            </div>
+            <ChevronDown size={13} color="#6366f1" style={{ transform: proofOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+          </div>
+
+          {proofOpen && proofList.map((proof, i) => (
+            <ProofCard key={i} proof={proof} />
           ))}
         </div>
       )}
@@ -389,8 +648,7 @@ export default function DastPanel({ dast }: Props) {
             style={{
               display: "flex", alignItems: "center", justifyContent: "space-between",
               cursor: "pointer", marginBottom: 8,
-              padding: "8px 10px", borderRadius: 7, background: "#0f1419",
-              border: "1px solid #2d3548",
+              padding: "8px 10px", borderRadius: 7, background: "#0f1419", border: "1px solid #2d3548",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -399,10 +657,7 @@ export default function DastPanel({ dast }: Props) {
                 Sandbox Executions ({execution_results.length})
               </span>
             </div>
-            <ChevronDown
-              size={13} color="#475569"
-              style={{ transform: execOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }}
-            />
+            <ChevronDown size={13} color="#475569" style={{ transform: execOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
           </div>
 
           {execOpen && execution_results.map((e, i) => (
@@ -411,11 +666,11 @@ export default function DastPanel({ dast }: Props) {
         </div>
       )}
 
-      {/* ── Source breakdown ── */}
+      {/* ── Source breakdown footer ── */}
       <div style={{
         marginTop: 14, padding: "8px 12px", borderRadius: 7,
         background: "#0f1419", border: "1px solid #1e1b2e",
-        display: "flex", gap: 20,
+        display: "flex", gap: 20, flexWrap: "wrap",
       }}>
         <div style={{ fontSize: 11, color: "#475569" }}>
           <span style={{ color: "#64748b" }}>Pattern scan: </span>
@@ -429,6 +684,14 @@ export default function DastPanel({ dast }: Props) {
           <span style={{ color: "#64748b" }}>Languages: </span>
           <span style={{ color: "#94a3b8", fontWeight: 600 }}>{dast.languages.join(", ") || "—"}</span>
         </div>
+        {summary.unfixable_count !== undefined && summary.unfixable_count > 0 && (
+          <div style={{ fontSize: 11, color: "#475569", marginLeft: "auto" }}>
+            <span style={{ color: "#64748b" }}>Auto-fixed: </span>
+            <span style={{ color: "#10b981", fontWeight: 600 }}>{summary.fixes_applied ?? 0}</span>
+            <span style={{ color: "#64748b" }}>  Unfixable: </span>
+            <span style={{ color: "#ef4444", fontWeight: 600 }}>{summary.unfixable_count}</span>
+          </div>
+        )}
       </div>
     </div>
   );

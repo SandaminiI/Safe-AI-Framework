@@ -5,14 +5,20 @@ import os
 import json
 import shutil
 import re, subprocess
+import logging
 from typing import List, Optional, Dict
 
+import requests as http_requests
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from plugin_router import router as plugins_router
 from file_router import router as file_router
+
+log = logging.getLogger("core-system")
+
+CA_SERVICE_URL = os.environ.get("CA_SERVICE_URL", "http://127.0.0.1:8011")
 
 
 
@@ -184,13 +190,18 @@ def core_tree(dir: str = ""):
     if not base.exists() or not base.is_dir():
         raise HTTPException(404, detail="Folder not found")
 
-    items = []
-    for entry in sorted(base.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
-        items.append({
-            "name": entry.name,
-            "path": str(entry.relative_to(PROJECT_DIR)),
-            "type": "file" if entry.is_file() else "dir",
-        })
+    # os.scandir caches is_file/is_dir from the OS directory listing
+    # avoiding a separate stat() call per entry
+    with os.scandir(str(base)) as scanner:
+        entries = sorted(scanner, key=lambda e: (e.is_file(), e.name.lower()))
+        items = [
+            {
+                "name": e.name,
+                "path": str(Path(e.path).relative_to(PROJECT_DIR)),
+                "type": "file" if e.is_file() else "dir",
+            }
+            for e in entries
+        ]
     return {"cwd": str(base.relative_to(PROJECT_DIR)), "items": items}
 
 @app.get("/core/file")
@@ -218,6 +229,66 @@ def core_save(
     return {"ok": True, "path": path}
 
 # ==============================================================================
+# Plugin certificate helpers
+# ==============================================================================
+SLUG_RE_CERT = re.compile(r"^[A-Za-z0-9._-]+$")
+
+def _issue_and_store_plugin_cert(slug: str) -> bool:
+    """
+    Request a persistent certificate from CA Service for *slug* and store it
+    alongside the plugin files in  ai_plugins/<slug>/cert/ .
+
+    Returns True on success, False on failure (logged but non-fatal so that
+    plugin creation itself still succeeds — the cert can be retried later).
+    """
+    plugin_dir = (PLUGINS_DIR / slug).resolve()
+    cert_dir = plugin_dir / "cert"
+
+    # Safety: slug must be valid and plugin_dir must be inside PLUGINS_DIR
+    if not SLUG_RE_CERT.match(slug):
+        log.warning("[CERT] Invalid slug for cert issuance: %s", slug)
+        return False
+    if PLUGINS_DIR.resolve() not in plugin_dir.parents:
+        log.warning("[CERT] Path traversal detected for slug: %s", slug)
+        return False
+
+    # Already has a cert – skip
+    if (cert_dir / "cert.pem").exists() and (cert_dir / "key.pem").exists():
+        log.info("[CERT] Plugin '%s' already has a certificate — skipping issuance", slug)
+        return True
+
+    try:
+        resp = http_requests.post(
+            f"{CA_SERVICE_URL}/issue-cert",
+            json={"plugin_id": slug, "persistent": True},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            log.error("[CERT] CA Service returned %s for '%s': %s", resp.status_code, slug, resp.text)
+            return False
+
+        data = resp.json()
+        cert_pem = data["certificate_pem"]
+        key_pem = data["plugin_private_key_pem"]
+        serial_number = data.get("serial_number", "")
+        expires_at = data.get("expires_at", "")
+
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        (cert_dir / "cert.pem").write_text(cert_pem, encoding="utf-8")
+        (cert_dir / "key.pem").write_text(key_pem, encoding="utf-8")
+        (cert_dir / "meta.json").write_text(
+            json.dumps({"serial_number": serial_number, "expires_at": expires_at, "plugin_id": slug}, indent=2),
+            encoding="utf-8",
+        )
+        log.info("[CERT] Persistent certificate issued & stored for plugin '%s' (serial=%s)", slug, serial_number)
+        return True
+
+    except Exception as exc:
+        log.error("[CERT] Failed to issue cert for plugin '%s': %s", slug, exc)
+        return False
+
+
+# ==============================================================================
 # Plugins (files + discovery)
 # ==============================================================================
 @app.post("/core/plugin/new")
@@ -228,25 +299,46 @@ def create_plugin(
     dest = _safe_join(PLUGINS_DIR, path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
+
+    # ── Auto-issue certificate when plugin becomes complete ──────────
+    # A plugin is "complete" when its directory contains manifest.json.
+    # We issue the cert once and never again (idempotent).
+    parts = Path(path).parts
+    if len(parts) >= 1:
+        slug = parts[0]  # e.g. "my-plugin" from "my-plugin/manifest.json"
+        plugin_dir = (PLUGINS_DIR / slug).resolve()
+        if (plugin_dir / "manifest.json").exists():
+            _issue_and_store_plugin_cert(slug)
+
     return {"ok": True, "path": str(dest.relative_to(PROJECT_DIR))}
 
 @app.get("/core/plugins")
 def list_plugins():
     out = []
-    for mf in PLUGINS_DIR.rglob("manifest.json"):
-        try:
-            data = json.loads(mf.read_text(encoding="utf-8"))
-            name = data.get("name") or mf.parent.name
-            out.append({
-                "name": name,
-                "title": data.get("title", name),
-                "path": str(mf.parent.relative_to(PLUGINS_DIR)),
-                "entry": data.get("entry", "entry.js"),
-                "runtime": data.get("runtime", "browser"),
-                "permissions": data.get("permissions", []),
-            })
-        except Exception:
-            pass
+    if not PLUGINS_DIR.exists():
+        return {"plugins": out}
+    # Plugins are always exactly one level deep: ai_plugins/<slug>/manifest.json
+    # Use os.scandir for a single shallow scan instead of recursive rglob
+    with os.scandir(str(PLUGINS_DIR)) as scanner:
+        for entry in scanner:
+            if not entry.is_dir():
+                continue
+            mf = Path(entry.path) / "manifest.json"
+            if not mf.exists():
+                continue
+            try:
+                data = json.loads(mf.read_text(encoding="utf-8"))
+                name = data.get("name") or entry.name
+                out.append({
+                    "name": name,
+                    "title": data.get("title", name),
+                    "path": entry.name,
+                    "entry": data.get("entry", "entry.js"),
+                    "runtime": data.get("runtime", "browser"),
+                    "permissions": data.get("permissions", []),
+                })
+            except Exception:
+                pass
     return {"plugins": out}
 
 # ==============================================================================
@@ -601,6 +693,33 @@ def docker_urls():
         ports = (rec or {}).get("ports") or []
         out[rel] = _ports_to_urls(ports)
     return {"urls": out}
+
+@app.get("/core/docker/ready", summary="Instant single-probe: is localhost:port responding?")
+def docker_ready(
+    port: int = Query(..., description="Host port to probe"),
+):
+    """
+    Non-blocking single probe — tries to connect to http://127.0.0.1:<port>
+    once with a short timeout. Returns {"ready": true/false} immediately.
+    The frontend should call this repeatedly on a short interval.
+    """
+    import http.client
+
+    conn: http.client.HTTPConnection | None = None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+        conn.request("HEAD", "/")
+        conn.getresponse()
+        return {"ready": True, "port": port}
+    except Exception:
+        return {"ready": False, "port": port}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 @app.post("/core/docker/stop", summary="Stop & remove ONE container by subdir")
 def docker_stop(subdir: str = Query(..., description="The subdir key you used when starting")):

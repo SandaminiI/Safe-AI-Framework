@@ -1,8 +1,13 @@
 # backend/dast-service/sandbox.py
 """
 Layer 2 — Docker sandbox execution with verbose logging.
-FIXED: properly handles multi-file code blobs by splitting
-       === FILE: xxx.py === separators into real files.
+
+FIXED:
+  1. openjdk:17-alpine was REMOVED from Docker Hub — replaced with
+     eclipse-temurin:17-jdk-alpine (the official successor image).
+  2. Properly handles multi-file code blobs via === FILE: === separators.
+  3. Captures execution PROOF: container ID, image digest, timing, output.
+  4. Java: compiles with javac, detects main class, runs with java.
 """
 
 from __future__ import annotations
@@ -11,32 +16,85 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from typing import Any, Dict, List, Optional
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Sandbox image config
+#  Java main-class detector
 # ─────────────────────────────────────────────────────────────────────────────
+
+_JAVA_MAIN_RE = re.compile(
+    r"public\s+(?:static\s+)?(?:final\s+)?class\s+(\w+)[\s\S]*?"
+    r"public\s+static\s+void\s+main\s*\(\s*String",
+    re.M,
+)
+
+
+def _find_java_main_class(files: Dict[str, str]) -> Optional[str]:
+    """
+    Scan all .java file contents for 'public static void main(String'.
+    Returns the fully-qualified class name (e.g. com.pms.App).
+    """
+    for filename, content in files.items():
+        if not filename.endswith(".java"):
+            continue
+        m = _JAVA_MAIN_RE.search(content)
+        if m:
+            class_name = m.group(1)
+            pkg_match  = re.search(r"^\s*package\s+([\w.]+)\s*;", content, re.M)
+            if pkg_match:
+                return f"{pkg_match.group(1)}.{class_name}"
+            return class_name
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Sandbox image config
+#
+#  ⚠️  openjdk:17-alpine was REMOVED from Docker Hub in Feb 2024.
+#     The official replacement is eclipse-temurin:17-jdk-alpine (Eclipse Adoptium).
+#     It provides the same JDK 17 with javac + java, same Alpine base.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _java_runner(entrypoint: str) -> List[str]:
+    """
+    Compile all .java files under /sandbox, then run the main class.
+    Uses /tmp/classes (mounted as tmpfs) for .class output.
+    """
+    return [
+        "sh", "-c",
+        f"find /sandbox -name '*.java' | xargs javac -d /tmp/classes 2>&1 && "
+        f"java -cp /tmp/classes {entrypoint} 2>&1"
+    ]
+
 
 SANDBOX_CONFIG: Dict[str, Dict[str, Any]] = {
     "python": {
-        "image":   "python:3.11-alpine",
-        "ext":     ".py",
-        "runner":  lambda ep: ["python", f"/sandbox/{ep}"],
+        "image":  "python:3.11-alpine",
+        "ext":    ".py",
+        "runner": lambda ep: ["python", f"/sandbox/{ep}"],
     },
     "javascript": {
-        "image":   "node:18-alpine",
-        "ext":     ".js",
-        "runner":  lambda ep: ["node", f"/sandbox/{ep}"],
+        "image":  "node:18-alpine",
+        "ext":    ".js",
+        "runner": lambda ep: ["node", f"/sandbox/{ep}"],
     },
     "typescript": {
-        "image":   "node:18-alpine",
-        "ext":     ".js",
-        "runner":  lambda ep: ["node", f"/sandbox/{ep}"],
+        "image":  "node:18-alpine",
+        "ext":    ".js",
+        "runner": lambda ep: ["node", f"/sandbox/{ep}"],
     },
     "go": {
-        "image":   "golang:1.21-alpine",
-        "ext":     ".go",
-        "runner":  lambda ep: ["sh", "-c", "cd /sandbox && go run ."],
+        "image":  "golang:1.21-alpine",
+        "ext":    ".go",
+        "runner": lambda ep: ["sh", "-c", "cd /sandbox && go run ."],
+    },
+    "java": {
+        # FIX: openjdk:17-alpine was removed from Docker Hub.
+        #      eclipse-temurin:17-jdk-alpine is the official Adoptium replacement.
+        "image":  "eclipse-temurin:17-jdk-alpine",
+        "ext":    ".java",
+        "runner": lambda ep: _java_runner(ep),
     },
 }
 
@@ -54,28 +112,31 @@ def _strip_fence(blob: str) -> str:
 
 
 def _split_into_files(inner: str) -> Dict[str, str]:
-    """
-    Split a multi-file blob into {filename: content}.
-    Handles separators like:  === FILE: config.py ===
-    Falls back to {"main.py": inner} for single-file blobs.
-    """
     separators = list(_FILE_SEP_RE.finditer(inner))
     if not separators:
         return {"main.py": inner}
 
     files: Dict[str, str] = {}
     for i, sep in enumerate(separators):
-        filename     = sep.group(1).strip().replace("\\", "/")
+        filename      = sep.group(1).strip().replace("\\", "/")
         content_start = sep.end()
         content_end   = separators[i + 1].start() if i + 1 < len(separators) else len(inner)
-        content       = inner[content_start:content_end].strip()
-        files[filename] = content
-
+        files[filename] = inner[content_start:content_end].strip()
     return files
 
 
-def _pick_entrypoint(files: Dict[str, str], ext: str) -> Optional[str]:
-    """Choose the best file to execute as entrypoint."""
+def _pick_entrypoint(files: Dict[str, str], lang: str, ext: str) -> Optional[str]:
+    if lang == "java":
+        main_class = _find_java_main_class(files)
+        if main_class:
+            print(f"     Java main class detected: {main_class}")
+            return main_class
+        for simple in ["Main", "App", "Application"]:
+            for fname in files:
+                if fname.endswith(f"/{simple}.java") or fname == f"{simple}.java":
+                    return simple
+        return None
+
     priority = [
         "main.py", "app.py", "server.py", "run.py",
         "main.js", "app.js", "index.js", "server.js",
@@ -84,7 +145,6 @@ def _pick_entrypoint(files: Dict[str, str], ext: str) -> Optional[str]:
     for name in priority:
         if name in files:
             return name
-    # fallback: first file with matching extension
     for name in files:
         if name.endswith(ext):
             return name
@@ -92,11 +152,8 @@ def _pick_entrypoint(files: Dict[str, str], ext: str) -> Optional[str]:
 
 
 def _write_files(td: str, files: Dict[str, str]) -> None:
-    """Write all parsed files into the temp directory."""
     for rel_path, content in files.items():
-        # Sanitize: no absolute paths, no traversal
-        parts = [p for p in rel_path.replace("\\", "/").split("/")
-                 if p and p != ".."]
+        parts    = [p for p in rel_path.replace("\\", "/").split("/") if p and p != ".."]
         if not parts:
             continue
         abs_path = os.path.join(td, *parts)
@@ -162,148 +219,290 @@ def pull_sandbox_images() -> Dict[str, bool]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Proof of execution helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_image_id(image: str) -> Optional[str]:
+    try:
+        r = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()[:19] + "…"
+    except Exception:
+        pass
+    return None
+
+
+def _run_with_container_id(docker_cmd: List[str], timeout: int) -> Dict[str, Any]:
+    import tempfile as _tf
+    cid_file = _tf.NamedTemporaryFile(delete=False, suffix=".cid")
+    cid_file.close()
+    os.unlink(cid_file.name)
+
+    cmd_with_cid = docker_cmd[:2] + [f"--cidfile={cid_file.name}"] + docker_cmd[2:]
+    t_start      = time.monotonic()
+
+    try:
+        result = subprocess.run(
+            cmd_with_cid,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=timeout + 5,
+        )
+        elapsed_ms = int((time.monotonic() - t_start) * 1000)
+
+        container_id: Optional[str] = None
+        try:
+            if os.path.exists(cid_file.name):
+                with open(cid_file.name) as f:
+                    cid = f.read().strip()
+                container_id = cid[:12] if cid else None
+                os.unlink(cid_file.name)
+        except Exception:
+            pass
+
+        return {
+            "success": True, "returncode": result.returncode,
+            "stdout": result.stdout, "stderr": result.stderr,
+            "elapsed_ms": elapsed_ms, "container_id": container_id, "timed_out": False,
+        }
+
+    except subprocess.TimeoutExpired:
+        elapsed_ms = int((time.monotonic() - t_start) * 1000)
+        try:
+            if os.path.exists(cid_file.name):
+                os.unlink(cid_file.name)
+        except Exception:
+            pass
+        return {
+            "success": False, "returncode": -1,
+            "stdout": "", "stderr": f"Execution timed out after {timeout}s",
+            "elapsed_ms": elapsed_ms, "container_id": None, "timed_out": True,
+        }
+
+    except FileNotFoundError:
+        return {
+            "success": False, "returncode": -1,
+            "stdout": "", "stderr": "Docker not found in PATH",
+            "elapsed_ms": 0, "container_id": None, "timed_out": False,
+        }
+
+    except Exception as exc:
+        return {
+            "success": False, "returncode": -1,
+            "stdout": "", "stderr": str(exc),
+            "elapsed_ms": 0, "container_id": None, "timed_out": False,
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Main sandbox executor
 # ─────────────────────────────────────────────────────────────────────────────
 
 def execute_in_sandbox(
     code_blob: str,
     lang: str,
-    timeout: int = 15,
+    timeout: int = 30,
 ) -> Dict[str, Any]:
-    """
-    Run code_blob inside an isolated Docker container.
-
-    Steps:
-      1. Strip outer code fence
-      2. Split multi-file blob into individual files
-      3. Write each file to a temp directory
-      4. Run the entrypoint file inside Docker
-      5. Return stdout/stderr for security signal analysis
-    """
     cfg = SANDBOX_CONFIG.get(lang)
     if not cfg:
         return {
             "executed": False, "skipped": True,
             "reason": f"No sandbox config for language: {lang}",
             "exit_code": -1, "stdout": "", "stderr": "", "timed_out": False,
+            "proof_of_execution": None,
         }
 
-    # ── Step 1 & 2: Parse the blob ─────────────────────────────────────────
-    inner      = _strip_fence(code_blob)
-    file_map   = _split_into_files(inner)
-    entrypoint = _pick_entrypoint(file_map, cfg["ext"])
+    inner    = _strip_fence(code_blob)
+    file_map = _split_into_files(inner)
+
+    if lang == "java":
+        lang_files = {k: v for k, v in file_map.items() if k.endswith(".java")}
+        if not lang_files:
+            lang_files = file_map
+    else:
+        lang_files = file_map
+
+    entrypoint = _pick_entrypoint(lang_files, lang, cfg["ext"])
     run_cmd    = cfg["runner"](entrypoint) if entrypoint else None
 
-    # ── Verbose header ──────────────────────────────────────────────────────
     print(f"\n  {'='*60}")
     print(f"  🐳 DOCKER SANDBOX EXECUTION")
     print(f"  {'='*60}")
     print(f"  Language   : {lang}")
     print(f"  Image      : {cfg['image']}")
-    print(f"  Files ({len(file_map)})  :")
-    for fname in sorted(file_map.keys()):
-        tag = " ← ENTRYPOINT" if fname == entrypoint else ""
-        print(f"    • {fname}{tag}  ({len(file_map[fname])} chars)")
+    if lang == "java":
+        print(f"  Main class : {entrypoint or '(not found)'}")
+        print(f"  Strategy   : javac (compile all) → java (run main class)")
+    print(f"  Files ({len(lang_files)})  :")
+    for fname in sorted(lang_files.keys()):
+        print(f"    • {fname}  ({len(lang_files[fname])} chars)")
     print(f"  Timeout    : {timeout}s")
-    print(f"  Isolation  : --network=none  --read-only  --memory=64m  --cap-drop=ALL")
+    print(f"  Isolation  : --network=none  --read-only  --memory=128m  --cap-drop=ALL")
 
     if not entrypoint:
-        print(f"  Result     : ❌ No entrypoint found — skipping sandbox")
+        msg = (
+            "No class with public static void main(String[] args) found"
+            if lang == "java" else
+            f"No entrypoint found among: {list(lang_files.keys())}"
+        )
+        print(f"  Result     : ❌ {msg} — skipping sandbox")
         print(f"  {'='*60}\n")
         return {
-            "executed": False, "skipped": True,
-            "reason": f"No entrypoint found among: {list(file_map.keys())}",
+            "executed": False, "skipped": True, "reason": msg,
             "exit_code": -1, "stdout": "", "stderr": "", "timed_out": False,
+            "proof_of_execution": None,
         }
 
-    # ── Step 3 & 4: Write files and run Docker ─────────────────────────────
+    image_id   = _get_image_id(cfg["image"])
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
     with tempfile.TemporaryDirectory() as td:
-        _write_files(td, file_map)
+        _write_files(td, lang_files)
 
-        print(f"  Temp dir   : {td}")
-        print(f"  Written    : {sorted(os.listdir(td))}")
+        print(f"  Image ID   : {image_id or 'unknown'}")
+        print(f"  Started at : {started_at}")
+
+        if lang == "java":
+            docker_cmd = [
+                "docker", "run", "--rm",
+                "--network=none",
+                "--read-only",
+                "--memory=128m",
+                "--memory-swap=128m",
+                "--cpus=0.5",
+                "--security-opt=no-new-privileges",
+                "--cap-drop=ALL",
+                f"--volume={td}:/sandbox:ro",
+                "--tmpfs=/tmp:size=64m",
+                "--tmpfs=/tmp/classes:size=32m",
+                "--pids-limit=100",
+                cfg["image"],
+                *run_cmd,
+            ]
+        else:
+            docker_cmd = [
+                "docker", "run", "--rm",
+                "--network=none",
+                "--read-only",
+                "--memory=64m",
+                "--memory-swap=64m",
+                "--cpus=0.5",
+                "--security-opt=no-new-privileges",
+                "--cap-drop=ALL",
+                f"--volume={td}:/sandbox:ro",
+                "--tmpfs=/tmp:size=10m,noexec",
+                "--pids-limit=50",
+                cfg["image"],
+                *run_cmd,
+            ]
+
         print(f"  Command    : docker run --rm --network=none ... {cfg['image']}")
+        if lang == "java":
+            print(f"  Run cmd    : {' '.join(run_cmd)}")
 
-        docker_cmd = [
-            "docker", "run",
-            "--rm",                              # auto-delete after exit
-            "--network=none",                    # NO network access
-            "--read-only",                       # immutable filesystem
-            "--memory=64m",                      # 64MB memory limit
-            "--memory-swap=64m",                 # no swap
-            "--cpus=0.5",                        # half CPU core
-            "--security-opt=no-new-privileges",  # no privilege escalation
-            "--cap-drop=ALL",                    # drop all Linux capabilities
-            f"--volume={td}:/sandbox:ro",        # mount code read-only
-            "--tmpfs=/tmp:size=10m,noexec",      # tiny writable /tmp
-            "--pids-limit=50",                   # max 50 processes
-            cfg["image"],
-            *run_cmd,
-        ]
+        run_result = _run_with_container_id(docker_cmd, timeout)
 
-        try:
-            result = subprocess.run(
-                docker_cmd,
-                capture_output=True, text=True,
-                encoding="utf-8", errors="replace",
-                timeout=timeout + 5,
-            )
+        elapsed_ms   = run_result["elapsed_ms"]
+        container_id = run_result["container_id"]
+        timed_out    = run_result["timed_out"]
+        returncode   = run_result["returncode"]
+        stdout       = run_result["stdout"]
+        stderr       = run_result["stderr"]
 
-            print(f"  Exit code  : {result.returncode}")
+        java_compile_error = (
+            lang == "java" and returncode != 0 and
+            ("error:" in stderr.lower() or "cannot find symbol" in stderr.lower()
+             or "javac" in stderr.lower())
+        )
 
-            if result.stdout.strip():
+        stdout_lines = stdout.strip().splitlines()
+        stderr_lines = stderr.strip().splitlines()
+
+        proof = {
+            "image":         cfg["image"],
+            "image_id":      image_id,
+            "container_id":  container_id,
+            "started_at":    started_at,
+            "elapsed_ms":    elapsed_ms,
+            "exit_code":     returncode,
+            "timed_out":     timed_out,
+            "stdout_lines":  stdout_lines[:20],
+            "stderr_lines":  stderr_lines[:20],
+            "entrypoint":    entrypoint,
+            "files":         sorted(lang_files.keys()),
+            "compile_error": java_compile_error,
+            "isolation": {
+                "network":    "none",
+                "read_only":  True,
+                "memory":     "128m" if lang == "java" else "64m",
+                "cpus":       "0.5",
+                "pids_limit": 100 if lang == "java" else 50,
+                "cap_drop":   "ALL",
+            },
+        }
+
+        print(f"  Container  : {container_id or '(--rm removed before capture)'}")
+        print(f"  Elapsed    : {elapsed_ms}ms")
+        print(f"  Exit code  : {returncode}")
+
+        if java_compile_error:
+            print(f"  ⚠️  Java compilation errors detected:")
+            for line in stderr_lines[:10]:
+                print(f"    │ {line}")
+        else:
+            if stdout_lines:
                 print(f"  STDOUT     :")
-                for line in result.stdout.strip().splitlines()[:15]:
+                for line in stdout_lines[:15]:
                     print(f"    │ {line}")
-
-            if result.stderr.strip():
+            if stderr_lines:
                 print(f"  STDERR     :")
-                for line in result.stderr.strip().splitlines()[:15]:
+                for line in stderr_lines[:15]:
                     print(f"    │ {line}")
 
-            status = "✔ Executed successfully" if result.returncode == 0 \
-                     else "⚠️  Non-zero exit (analyzing for security signals...)"
-            print(f"  Result     : {status}")
-            print(f"  {'='*60}\n")
-
-            return {
-                "executed":         True,
-                "exit_code":        result.returncode,
-                "stdout":           result.stdout[:2000],
-                "stderr":           result.stderr[:2000],
-                "timed_out":        False,
-                "skipped":          False,
-                "files_executed":   list(file_map.keys()),
-                "entrypoint":       entrypoint,
-            }
-
-        except subprocess.TimeoutExpired:
+        if timed_out:
             print(f"  Result     : ⏰ TIMED OUT after {timeout}s!")
-            print(f"  {'='*60}\n")
+        elif java_compile_error:
+            print(f"  Result     : ⚠️  Compiled with errors (runtime signals still checked)")
+        elif returncode == 0:
+            print(f"  Result     : ✔ Executed successfully")
+        else:
+            print(f"  Result     : ⚠️  Non-zero exit (analyzing for security signals...)")
+        print(f"  {'='*60}\n")
+
+        if timed_out:
             return {
                 "executed": True, "timed_out": True,
                 "exit_code": -1, "stdout": "",
                 "stderr": f"Execution timed out after {timeout}s",
                 "skipped": False,
+                "proof_of_execution": proof,
+                "files_executed": list(lang_files.keys()),
+                "entrypoint": entrypoint, "lang": lang,
             }
 
-        except FileNotFoundError:
-            print(f"  Result     : ❌ Docker not found in PATH")
-            print(f"  {'='*60}\n")
+        if not run_result["success"] and "Docker not found" in stderr:
             return {
-                "executed": False, "skipped": True,
-                "reason": "Docker not found",
+                "executed": False, "skipped": True, "reason": "Docker not found",
                 "exit_code": -1, "stdout": "", "stderr": "", "timed_out": False,
+                "proof_of_execution": None,
             }
 
-        except Exception as exc:
-            print(f"  Result     : ❌ Unexpected error: {exc}")
-            print(f"  {'='*60}\n")
-            return {
-                "executed": False, "error": str(exc),
-                "exit_code": -1, "stdout": "", "stderr": "",
-                "timed_out": False, "skipped": False,
-            }
+        return {
+            "executed":           True,
+            "exit_code":          returncode,
+            "stdout":             stdout[:2000],
+            "stderr":             stderr[:2000],
+            "timed_out":          False,
+            "skipped":            False,
+            "java_compile_error": java_compile_error,
+            "files_executed":     list(lang_files.keys()),
+            "entrypoint":         entrypoint,
+            "lang":               lang,
+            "proof_of_execution": proof,
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -311,21 +510,26 @@ def execute_in_sandbox(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _RUNTIME_SIGNALS = [
-    # (signal_text,             check_id,                      sev,        message,                                                                   owasp)
-    ("connection refused",      "runtime-network-attempt",     "HIGH",     "Network connection attempt blocked by sandbox — SSRF risk.",              "A10 - SSRF"),
-    ("network unreachable",     "runtime-network-attempt",     "HIGH",     "Network connection attempt blocked by sandbox — SSRF risk.",              "A10 - SSRF"),
-    ("name or service not",     "runtime-network-attempt",     "HIGH",     "DNS lookup attempted (blocked) — SSRF risk.",                             "A10 - SSRF"),
-    ("permission denied",       "runtime-unauthorized-access", "HIGH",     "Unauthorized file/resource access attempted at runtime.",                 "A01 - Broken Access Control"),
-    ("segmentation fault",      "runtime-memory-corruption",   "CRITICAL", "Segmentation fault — memory safety vulnerability.",                      "A06 - Vulnerable Components"),
-    ("stack overflow",          "runtime-stack-overflow",      "HIGH",     "Stack overflow detected — unbounded recursion.",                          "A06 - Vulnerable Components"),
-    ("recursionerror",          "runtime-stack-overflow",      "HIGH",     "RecursionError — unbounded recursion detected.",                          "A06 - Vulnerable Components"),
-    ("memoryerror",             "runtime-memory-exhaustion",   "MEDIUM",   "MemoryError — memory exhaustion vulnerability.",                          "A06 - Vulnerable Components"),
-    ("outofmemoryerror",        "runtime-memory-exhaustion",   "MEDIUM",   "OutOfMemoryError — memory exhaustion vulnerability.",                     "A06 - Vulnerable Components"),
+    ("connection refused",     "runtime-network-attempt",     "HIGH",     "Network connection attempt blocked by sandbox — SSRF risk.",              "A10 - SSRF"),
+    ("network unreachable",    "runtime-network-attempt",     "HIGH",     "Network connection attempt blocked by sandbox — SSRF risk.",              "A10 - SSRF"),
+    ("name or service not",    "runtime-network-attempt",     "HIGH",     "DNS lookup attempted (blocked) — SSRF risk.",                             "A10 - SSRF"),
+    ("unknownhostexception",   "runtime-network-attempt",     "HIGH",     "Java DNS lookup attempted (blocked) — SSRF risk.",                        "A10 - SSRF"),
+    ("connectexception",       "runtime-network-attempt",     "HIGH",     "Java network connection attempted (blocked) — SSRF risk.",                "A10 - SSRF"),
+    ("permission denied",      "runtime-unauthorized-access", "HIGH",     "Unauthorized file/resource access attempted at runtime.",                 "A01 - Broken Access Control"),
+    ("accesscontrolexception", "runtime-unauthorized-access", "HIGH",     "Java AccessControlException — unauthorized access attempted.",            "A01 - Broken Access Control"),
+    ("segmentation fault",     "runtime-memory-corruption",   "CRITICAL", "Segmentation fault — memory safety vulnerability.",                      "A06 - Vulnerable Components"),
+    ("stack overflow",         "runtime-stack-overflow",      "HIGH",     "Stack overflow detected — unbounded recursion.",                          "A06 - Vulnerable Components"),
+    ("stackoverflowerror",     "runtime-stack-overflow",      "HIGH",     "Java StackOverflowError — unbounded recursion detected.",                 "A06 - Vulnerable Components"),
+    ("recursionerror",         "runtime-stack-overflow",      "HIGH",     "RecursionError — unbounded recursion detected.",                          "A06 - Vulnerable Components"),
+    ("outofmemoryerror",       "runtime-memory-exhaustion",   "MEDIUM",   "Java OutOfMemoryError — memory exhaustion vulnerability.",               "A06 - Vulnerable Components"),
+    ("memoryerror",            "runtime-memory-exhaustion",   "MEDIUM",   "MemoryError — memory exhaustion vulnerability.",                          "A06 - Vulnerable Components"),
+    ("classnotfoundexception", "runtime-classpath-issue",     "LOW",      "Java ClassNotFoundException — missing dependency at runtime.",            "A06 - Vulnerable Components"),
+    ("sql syntax",             "runtime-sql-error",           "HIGH",     "SQL syntax error at runtime — possible injection or unparameterized query.", "A03 - Injection"),
+    ("sqlexception",           "runtime-sql-error",           "MEDIUM",   "Java SQLException at runtime — database error detected.",                 "A03 - Injection"),
 ]
 
 
 def analyze_sandbox_output(exec_result: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Scan Docker output for runtime security signals."""
     if not exec_result.get("executed"):
         return []
 
@@ -335,35 +539,41 @@ def analyze_sandbox_output(exec_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         (exec_result.get("stderr") or "")
     ).lower()
 
-    seen: set = set()
+    seen:  set  = set()
+    proof = exec_result.get("proof_of_execution")
 
     for signal, check_id, sev, message, owasp in _RUNTIME_SIGNALS:
         if signal in combined and check_id not in seen:
             seen.add(check_id)
             print(f"  🚨 Runtime signal: '{signal}' → {check_id} [{sev}]")
             findings.append({
-                "check_id": f"dast-{check_id}",
-                "severity": sev,
-                "message":  message,
-                "owasp":    owasp,
-                "cwe":      None,
-                "line":     None,
-                "snippet":  combined[:200],
-                "source":   "docker_execution",
-                "runtime":  True,
+                "check_id":           f"dast-{check_id}",
+                "severity":           sev,
+                "message":            message,
+                "owasp":              owasp,
+                "cwe":                None,
+                "line":               None,
+                "file":               proof.get("entrypoint") if proof else None,
+                "snippet":            combined[:200],
+                "source":             "docker_execution",
+                "runtime":            True,
+                "proof_of_execution": proof,
             })
 
     if exec_result.get("timed_out"):
         print(f"  🚨 Runtime signal: timeout → dast-runtime-timeout [MEDIUM]")
         findings.append({
-            "check_id": "dast-runtime-timeout",
-            "severity": "MEDIUM",
-            "message":  "Code timed out — possible infinite loop or resource exhaustion.",
-            "owasp":    "A06 - Vulnerable Components",
-            "cwe":      "CWE-400",
-            "line":     None, "snippet": None,
-            "source":   "docker_execution",
-            "runtime":  True,
+            "check_id":           "dast-runtime-timeout",
+            "severity":           "MEDIUM",
+            "message":            "Code timed out — possible infinite loop or resource exhaustion.",
+            "owasp":              "A06 - Vulnerable Components",
+            "cwe":                "CWE-400",
+            "line":               None,
+            "file":               proof.get("entrypoint") if proof else None,
+            "snippet":            None,
+            "source":             "docker_execution",
+            "runtime":            True,
+            "proof_of_execution": proof,
         })
 
     if not findings:
